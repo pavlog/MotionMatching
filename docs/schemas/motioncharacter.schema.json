@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://motionmatching.studio/schemas/motioncharacter.schema.json",
+  "title": "MotionMatching Studio Character Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "id",
+    "name",
+    "visualManifestPath",
+    "clipManifestPaths"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^chr_[a-f0-9]{12}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "visualManifestPath": {
+      "const": "Visual/visual.json"
+    },
+    "clipManifestPaths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

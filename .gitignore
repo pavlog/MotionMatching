@@ -1,0 +1,14 @@
+.tools/
+.motionstudio/
+
+# Node / frontend
+node_modules/
+dist/
+
+# .NET
+bin/
+obj/
+TestResults/
+
+# OS/editor
+.DS_Store

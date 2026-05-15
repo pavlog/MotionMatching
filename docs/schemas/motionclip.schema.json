@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://motionmatching.studio/schemas/motionclip.schema.json",
+  "title": "MotionMatching Studio Clip Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "id",
+    "name",
+    "sourceKind",
+    "sourceFileName",
+    "managedSourcePath",
+    "sourceFileSizeBytes",
+    "importedAtUtc",
+    "includeInBuild",
+    "tags"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^clp_[a-f0-9]{12}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceKind": {
+      "enum": [
+        "fbx",
+        "bvh"
+      ]
+    },
+    "sourceFileName": {
+      "type": "string",
+      "pattern": "^[^/\\\\]+\\.(fbx|bvh|FBX|BVH)$"
+    },
+    "managedSourcePath": {
+      "pattern": "^source\\.(fbx|bvh)$"
+    },
+    "sourceFileSizeBytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "frameCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "frameRate": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "durationSeconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "importedAtUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "includeInBuild": {
+      "type": "boolean"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
