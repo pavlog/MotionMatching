@@ -527,7 +527,7 @@ export function BabylonViewport({
         </button>
         <button
           type="button"
-          className={showFootContacts ? 'active' : ''}
+          className={`foot-contact-toggle ${showFootContacts ? 'active' : ''}`}
           disabled={!footContacts}
           onClick={() => setShowFootContacts((current) => !current)}
           title={showFootContacts ? 'Hide foot contacts' : 'Show foot contacts'}

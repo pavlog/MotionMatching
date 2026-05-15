@@ -650,6 +650,7 @@ Clips without `clipRole` may still be included as generic search data with warni
 - Entering Play Mode resets the character to the origin on the preview plane.
 - MVP Play Mode uses an infinite ground plane at `Y = 0`.
 - Future preview automation may add paths/points for automated movement tests.
+- Future clip recording should support an editor-authored capsule/controller track: the user places a capsule, records or keys its motion on the timeline, then bakes/saves that recorded motion as a new clip for preview and later database use. This is an authoring workflow, separate from importing FBX/BVH source clips.
 - MVP includes jump.
 - Play Mode is a mechanics prototype, not only an animation viewer.
 - Studio PreviewRuntime can become the reference gameplay controller if it produces better behavior than the current game controller.

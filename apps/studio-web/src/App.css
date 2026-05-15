@@ -972,7 +972,8 @@
 
 .primary-action:disabled,
 .secondary-action:disabled,
-.icon-button:disabled {
+.icon-button:disabled,
+.viewport-toolbar button:disabled {
   cursor: default;
   opacity: 0.58;
 }
@@ -1008,6 +1009,17 @@
   border-color: rgba(104, 183, 255, 0.55);
   color: #68b7ff;
   background: rgba(104, 183, 255, 0.14);
+}
+
+.viewport-toolbar button.foot-contact-toggle.active {
+  border-color: rgba(242, 183, 83, 0.62);
+  color: #f2b753;
+  background: rgba(242, 183, 83, 0.15);
+}
+
+.viewport-toolbar button.foot-contact-toggle:disabled {
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .log-lines {

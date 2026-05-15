@@ -180,6 +180,7 @@ run and jump with the current character
 - Guided retargeting fix wizard.
 - Multi-character Play Mode.
 - Gamepad input.
+- Clip recording/authoring from a placed capsule/controller timeline, including baking the recorded motion into a new clip.
 - Obstacles, ledges, markers, or contextual interactions.
 - Persistent build artifacts in portable zip.
 - SQLite or database-backed workspace state.
