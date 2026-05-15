@@ -101,6 +101,13 @@ public sealed class BrowserWorkspaceService
 
         var validation = await _visualInspector.InspectAsync(sourcePath, cancellationToken);
         string? previewUrl = null;
+        var importLog = new List<ImportLogEntryResponse>
+        {
+            Info($"Stored visual source {visualFile.FileName}"),
+            validation.CanCompile
+                ? Info("Visual FBX validation passed")
+                : Error("Visual FBX validation blocked preview generation")
+        };
         if (validation.CanCompile)
         {
             var previewPath = PreviewGlbCacheService.GetDefaultPreviewPath(characterRoot);
@@ -108,6 +115,11 @@ public sealed class BrowserWorkspaceService
             if (preview.Succeeded)
             {
                 previewUrl = ToAssetUrl("Characters", characterFolderName, "Cache", "Preview", "visual.glb");
+                importLog.Add(Info("Generated character preview GLB"));
+            }
+            else
+            {
+                importLog.Add(Warning("Character preview GLB was not generated"));
             }
         }
 
@@ -127,7 +139,8 @@ public sealed class BrowserWorkspaceService
             character.VisualManifestPath,
             [],
             previewUrl,
-            ToValidationResponse(validation));
+            ToValidationResponse(validation),
+            importLog);
     }
 
     public async Task<CharacterResponse> ImportClipAsync(
@@ -285,6 +298,8 @@ public sealed class BrowserWorkspaceService
             ? ToValidationResponse(await _visualInspector.InspectAsync(sourcePath, cancellationToken))
             : null;
         var clips = await ReadClipResponsesAsync(characterRoot, manifest, cancellationToken);
+        var previewUrl = File.Exists(previewPath) ? ToAssetUrl(reference.ManifestPath.Split('/')[0], Path.GetFileName(characterRoot), "Cache", "Preview", "visual.glb") : null;
+        var importLog = BuildCharacterImportLog(manifest, validation, previewUrl, clips.Count);
 
         return new CharacterResponse(
             manifest.Id.Value,
@@ -292,8 +307,9 @@ public sealed class BrowserWorkspaceService
             reference.ManifestPath,
             manifest.VisualManifestPath,
             clips,
-            File.Exists(previewPath) ? ToAssetUrl(reference.ManifestPath.Split('/')[0], Path.GetFileName(characterRoot), "Cache", "Preview", "visual.glb") : null,
-            validation);
+            previewUrl,
+            validation,
+            importLog);
     }
 
     private async Task<IReadOnlyList<ClipResponse>> ReadClipResponsesAsync(
@@ -329,7 +345,8 @@ public sealed class BrowserWorkspaceService
             var rootMotion = previewUrl is not null
                 ? TryReadRootMotionDiagnostics(GetClipPreviewPath(clipRoot))
                 : null;
-            var validation = await ValidateClipSkeletonAsync(characterRoot, clip, sourcePath, cancellationToken);
+            var skeletonValidation = await ValidateClipSkeletonAsync(characterRoot, clip, sourcePath, cancellationToken);
+            var importLog = BuildClipImportLog(clip, previewUrl, rootMotion, skeletonValidation);
 
             clips.Add(new ClipResponse(
                 clip.Id.Value,
@@ -343,13 +360,15 @@ public sealed class BrowserWorkspaceService
                 previewUrl,
                 clip.IncludeInBuild,
                 rootMotion,
-                validation));
+                skeletonValidation.Validation,
+                skeletonValidation.Skeleton,
+                importLog));
         }
 
         return clips;
     }
 
-    private async Task<ValidationResponse> ValidateClipSkeletonAsync(
+    private async Task<ClipSkeletonValidationResult> ValidateClipSkeletonAsync(
         string characterRoot,
         ClipManifest clip,
         string sourcePath,
@@ -378,7 +397,7 @@ public sealed class BrowserWorkspaceService
 
         if (!visualSkeleton.Succeeded || !clipSkeleton.Succeeded)
         {
-            return new ValidationResponse(true, findings);
+            return new ClipSkeletonValidationResult(new ValidationResponse(true, findings), null);
         }
 
         var visualBones = NormalizeBoneNames(visualSkeleton.BoneNames);
@@ -389,20 +408,36 @@ public sealed class BrowserWorkspaceService
                 "empty_skeleton",
                 "warning",
                 "Visual or clip skeleton has no named bones to compare."));
-            return new ValidationResponse(true, findings);
+            return new ClipSkeletonValidationResult(new ValidationResponse(true, findings), null);
         }
 
-        var matchedCount = visualBones.Count(bone => clipBones.Contains(bone));
+        var matchedBones = visualBones.Where(clipBones.Contains).Order(StringComparer.Ordinal).ToArray();
+        var matchedCount = matchedBones.Length;
+        var visualOnlyBones = visualBones.Except(clipBones).Order(StringComparer.Ordinal).ToArray();
+        var clipOnlyBones = clipBones.Except(visualBones).Order(StringComparer.Ordinal).ToArray();
+        var missingCriticalBones = new[] { "hips", "pelvis", "root", "spine", "head" }
+            .Where(bone => !clipBones.Contains(bone))
+            .ToArray();
+        var coverage = matchedCount / (double)visualBones.Count;
+        var skeleton = new SkeletonValidationResponse(
+            visualBones.Count,
+            clipBones.Count,
+            matchedCount,
+            coverage,
+            missingCriticalBones,
+            matchedBones.Take(12).ToArray(),
+            visualOnlyBones.Take(12).ToArray(),
+            clipOnlyBones.Take(12).ToArray());
+
         if (matchedCount == 0)
         {
             findings.Add(new ValidationFindingResponse(
                 "skeleton_unmatched",
                 "error",
                 "Clip skeleton has no matching bone names with the visual skeleton."));
-            return new ValidationResponse(false, findings);
+            return new ClipSkeletonValidationResult(new ValidationResponse(false, findings), skeleton);
         }
 
-        var coverage = matchedCount / (double)visualBones.Count;
         if (coverage < 0.65)
         {
             findings.Add(new ValidationFindingResponse(
@@ -419,7 +454,9 @@ public sealed class BrowserWorkspaceService
                 "Clip skeleton has no obvious Hips/Pelvis/Root bone for root motion preview."));
         }
 
-        return new ValidationResponse(!findings.Any(finding => finding.Severity == "error"), findings);
+        return new ClipSkeletonValidationResult(
+            new ValidationResponse(!findings.Any(finding => finding.Severity == "error"), findings),
+            skeleton);
     }
 
     private async Task<string?> TryGenerateClipPreviewUrlAsync(
@@ -571,6 +608,98 @@ public sealed class BrowserWorkspaceService
             frameCount.Value * frameTimeSeconds.Value);
     }
 
+    private static IReadOnlyList<ImportLogEntryResponse> BuildCharacterImportLog(
+        CharacterManifest character,
+        ValidationResponse? validation,
+        string? previewUrl,
+        int clipCount)
+    {
+        var entries = new List<ImportLogEntryResponse>
+        {
+            Info($"Loaded character {character.Name}"),
+            previewUrl is null ? Warning("Character preview GLB is unavailable") : Info("Character preview GLB is ready"),
+            Info($"{clipCount} clip(s) attached")
+        };
+
+        if (validation is null)
+        {
+            entries.Add(Warning("Visual validation has not run"));
+        }
+        else
+        {
+            entries.AddRange(validation.Findings.Select(ToLogEntry));
+            if (validation.Findings.Count == 0)
+            {
+                entries.Add(Info("Visual validation has no findings"));
+            }
+        }
+
+        return entries;
+    }
+
+    private static IReadOnlyList<ImportLogEntryResponse> BuildClipImportLog(
+        ClipManifest clip,
+        string? previewUrl,
+        RootMotionDiagnosticsResponse? rootMotion,
+        ClipSkeletonValidationResult skeletonValidation)
+    {
+        var entries = new List<ImportLogEntryResponse>
+        {
+            Info($"Loaded {clip.SourceKind.ToString().ToUpperInvariant()} source {clip.SourceFileName}")
+        };
+
+        if (clip.FrameCount is not null && clip.FrameRate is not null && clip.DurationSeconds is not null)
+        {
+            entries.Add(Info($"Timeline: {clip.FrameCount} frames at {clip.FrameRate:0.##} fps"));
+        }
+        else
+        {
+            entries.Add(Warning("Timeline metadata is unavailable"));
+        }
+
+        entries.Add(previewUrl is null ? Warning("Animation preview GLB is unavailable") : Info("Animation preview GLB is ready"));
+        entries.Add(rootMotion is null
+            ? Warning("Root motion diagnostics are unavailable")
+            : Info($"Root motion: {rootMotion.SourceName}, XZ {rootMotion.HorizontalDistance:0.##} units"));
+
+        if (skeletonValidation.Skeleton is null)
+        {
+            entries.Add(Warning("Skeleton coverage could not be calculated"));
+        }
+        else
+        {
+            entries.Add(Info($"Skeleton match: {skeletonValidation.Skeleton.MatchedBoneCount}/{skeletonValidation.Skeleton.VisualBoneCount} visual bones"));
+        }
+
+        entries.AddRange(skeletonValidation.Validation.Findings.Select(ToLogEntry));
+        if (skeletonValidation.Validation.Findings.Count == 0)
+        {
+            entries.Add(Info("Clip validation has no findings"));
+        }
+
+        return entries;
+    }
+
+    private static ImportLogEntryResponse ToLogEntry(ValidationFindingResponse finding)
+    {
+        return new ImportLogEntryResponse(finding.Severity, $"{finding.Code}: {finding.Message}");
+    }
+
+    private static ImportLogEntryResponse Info(string message)
+    {
+        return new ImportLogEntryResponse("info", message);
+    }
+
+    private static ImportLogEntryResponse Warning(string message)
+    {
+        return new ImportLogEntryResponse("warning", message);
+    }
+
+    private static ImportLogEntryResponse Error(string message)
+    {
+        return new ImportLogEntryResponse("error", message);
+    }
+
     private string ReserveCharacterFolderName(string requestedName)
     {
         var baseName = SanitizeFolderName(requestedName);
@@ -647,4 +776,8 @@ public sealed class BrowserWorkspaceService
                 finding.Severity.ToString().ToLowerInvariant(),
                 finding.Message)).ToArray());
     }
+
+    private sealed record ClipSkeletonValidationResult(
+        ValidationResponse Validation,
+        SkeletonValidationResponse? Skeleton);
 }

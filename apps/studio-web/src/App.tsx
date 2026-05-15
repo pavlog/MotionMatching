@@ -44,6 +44,8 @@ function App() {
   const [selection, setSelection] = useState<Selection | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const [timelineFrame, setTimelineFrame] = useState(0)
+  const [loopStartFrame, setLoopStartFrame] = useState(0)
+  const [loopEndFrame, setLoopEndFrame] = useState(-1)
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false)
   const [animationPreviewState, setAnimationPreviewState] = useState('none')
   const [clipMotionMode, setClipMotionMode] = useState<ClipMotionMode>('inPlace')
@@ -64,6 +66,8 @@ function App() {
   const timelineFrameRate = selectedClip?.frameRate ?? fallbackFrameRate
   const maxTimelineFrame = Math.max(timelineFrameCount - 1, 0)
   const visibleTimelineFrame = Math.min(timelineFrame, maxTimelineFrame)
+  const visibleLoopStartFrame = Math.min(Math.max(loopStartFrame, 0), maxTimelineFrame)
+  const visibleLoopEndFrame = Math.max(visibleLoopStartFrame, loopEndFrame >= 0 ? Math.min(loopEndFrame, maxTimelineFrame) : maxTimelineFrame)
   const hasClipTimelineMetadata = Boolean(selectedClip?.frameCount && selectedClip.frameRate && selectedClip.durationSeconds)
 
   useEffect(() => {
@@ -72,7 +76,7 @@ function App() {
 
   const appendLog = useCallback((message: string, level: LogEntry['level'] = 'info') => {
     setLogs((current) => [
-      ...current.slice(-4),
+      ...current.slice(-7),
       {
         id: Date.now() + Math.random(),
         level,
@@ -81,6 +85,26 @@ function App() {
     ])
   }, [])
 
+  const appendImportLogs = useCallback((entries: { level: LogEntry['level']; message: string }[]) => {
+    if (!entries.length) {
+      return
+    }
+
+    setLogs((current) => [
+      ...current,
+      ...entries.map((entry) => ({
+        id: Date.now() + Math.random(),
+        level: entry.level,
+        message: entry.message,
+      })),
+    ].slice(-8))
+  }, [])
+
+  const seekTimeline = useCallback((frame: number) => {
+    setTimelineFrame(Math.min(Math.max(frame, 0), maxTimelineFrame))
+    setIsTimelinePlaying(false)
+  }, [maxTimelineFrame])
+
   const stepTimeline = useCallback((delta: number) => {
     setIsTimelinePlaying(false)
     setTimelineFrame((current) => Math.min(Math.max(current + delta, 0), maxTimelineFrame))
@@ -88,6 +112,8 @@ function App() {
 
   const resetTimeline = useCallback(() => {
     setTimelineFrame(0)
+    setLoopStartFrame(0)
+    setLoopEndFrame(-1)
     setIsTimelinePlaying(false)
   }, [])
 
@@ -118,16 +144,18 @@ function App() {
       return
     }
 
-    const startFrame = timelineFrameRef.current
+    const loopStart = visibleLoopStartFrame
+    const loopEnd = visibleLoopEndFrame
+    const startFrame = Math.min(Math.max(timelineFrameRef.current, loopStart), loopEnd)
     const startTime = window.performance.now()
-    const frameSpan = maxTimelineFrame + 1
+    const frameSpan = loopEnd - loopStart + 1
     let animationFrameId = 0
     let lastFrame = startFrame
 
     const tick = (now: number) => {
       const elapsedSeconds = (now - startTime) / 1000
       const elapsedFrames = Math.floor(elapsedSeconds * timelineFrameRate)
-      const nextFrame = (startFrame + elapsedFrames) % frameSpan
+      const nextFrame = loopStart + ((startFrame - loopStart + elapsedFrames) % frameSpan)
 
       if (nextFrame !== lastFrame) {
         lastFrame = nextFrame
@@ -139,7 +167,7 @@ function App() {
 
     animationFrameId = window.requestAnimationFrame(tick)
     return () => window.cancelAnimationFrame(animationFrameId)
-  }, [isTimelinePlaying, maxTimelineFrame, selectedClip, timelineFrameRate])
+  }, [isTimelinePlaying, maxTimelineFrame, selectedClip, timelineFrameRate, visibleLoopEndFrame, visibleLoopStartFrame])
 
   useEffect(() => {
     const handleTimelineKeys = (event: KeyboardEvent) => {
@@ -236,6 +264,7 @@ function App() {
       })
       selectCharacter(character.id)
       appendLog(`Imported ${character.name}`, character.validation?.canCompile === false ? 'warning' : 'info')
+      appendImportLogs(character.importLog)
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Import failed', 'error')
     } finally {
@@ -271,6 +300,9 @@ function App() {
         selectCharacter(updatedCharacter.id)
       }
       appendLog(`Imported clip ${newClip?.name ?? file.name}`)
+      if (newClip) {
+        appendImportLogs(newClip.importLog)
+      }
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Clip import failed', 'error')
     } finally {
@@ -433,21 +465,30 @@ function App() {
         )}
       </aside>
 
-      <section className="bottom-panel" aria-label="Timeline and logs">
-        <TimelinePanel
-          clip={selectedClip}
-          frame={visibleTimelineFrame}
-          frameCount={timelineFrameCount}
-          frameRate={timelineFrameRate}
-          hasMetadata={hasClipTimelineMetadata}
-          isPlaying={isTimelinePlaying}
-          onTogglePlay={() => selectedClip && setIsTimelinePlaying((current) => !current)}
-          onStep={stepTimeline}
-          onSeek={(frame) => {
-            setTimelineFrame(frame)
-            setIsTimelinePlaying(false)
-          }}
-        />
+      <section className={`bottom-panel ${selectedClip ? 'has-timeline' : 'log-only'}`} aria-label="Timeline and logs">
+        {selectedClip ? (
+          <TimelinePanel
+            clip={selectedClip}
+            frame={visibleTimelineFrame}
+            frameCount={timelineFrameCount}
+            frameRate={timelineFrameRate}
+            hasMetadata={hasClipTimelineMetadata}
+            isPlaying={isTimelinePlaying}
+            onTogglePlay={() => selectedClip && setIsTimelinePlaying((current) => !current)}
+            onStep={stepTimeline}
+            onSeek={seekTimeline}
+            loopStartFrame={visibleLoopStartFrame}
+            loopEndFrame={visibleLoopEndFrame}
+            onSetLoopStart={(frame) => {
+              const nextStart = Math.min(Math.max(frame, 0), visibleLoopEndFrame)
+              setLoopStartFrame(nextStart)
+            }}
+            onSetLoopEnd={(frame) => {
+              const nextEnd = Math.max(Math.min(frame, maxTimelineFrame), visibleLoopStartFrame)
+              setLoopEndFrame(nextEnd)
+            }}
+          />
+        ) : null}
         <div className="log-strip">
           <TerminalSquare size={15} aria-hidden="true" />
           <div className="log-lines">
@@ -493,6 +534,10 @@ function TimelinePanel({
   onTogglePlay,
   onStep,
   onSeek,
+  loopStartFrame,
+  loopEndFrame,
+  onSetLoopStart,
+  onSetLoopEnd,
 }: {
   clip: ClipResponse | null
   frame: number
@@ -503,26 +548,45 @@ function TimelinePanel({
   onTogglePlay: () => void
   onStep: (delta: number) => void
   onSeek: (frame: number) => void
+  loopStartFrame: number
+  loopEndFrame: number
+  onSetLoopStart: (frame: number) => void
+  onSetLoopEnd: (frame: number) => void
 }) {
+  const rulerRef = useRef<HTMLDivElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const maxFrame = Math.max(frameCount - 1, 0)
   const progress = `${maxFrame > 0 ? (frame / maxFrame) * 100 : 0}%`
+  const loopStartProgress = `${maxFrame > 0 ? (loopStartFrame / maxFrame) * 100 : 0}%`
+  const loopEndProgress = `${maxFrame > 0 ? (loopEndFrame / maxFrame) * 100 : 0}%`
   const displayDurationSeconds = frameCount / Math.max(frameRate, 1)
   const currentSeconds = frame / Math.max(frameRate, 1)
   const metadataSuffix = hasMetadata ? '' : ' estimated'
-  const seekFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+
+  const seekFromClientX = (clientX: number) => {
     if (!clip) {
       return
     }
 
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const ratio = (event.clientX - bounds.left) / Math.max(bounds.width, 1)
+    const bounds = rulerRef.current?.getBoundingClientRect()
+    if (!bounds) {
+      return
+    }
+
+    const ratio = (clientX - bounds.left) / Math.max(bounds.width, 1)
     onSeek(Math.round(Math.min(Math.max(ratio, 0), 1) * maxFrame))
+  }
+
+  const seekFromPointer = (event: React.PointerEvent<HTMLElement>) => {
+    seekFromClientX(event.clientX)
   }
 
   return (
     <div className="timeline-strip">
       <div className="timeline-controls" aria-label="Timeline controls">
+        <button type="button" disabled={!clip} onClick={() => onSeek(0)} title="First frame" aria-label="First frame">
+          <StepBack size={14} aria-hidden="true" />
+        </button>
         <button type="button" disabled={!clip} onClick={() => onStep(-1)} title="Previous frame" aria-label="Previous frame">
           <StepBack size={14} aria-hidden="true" />
         </button>
@@ -532,12 +596,16 @@ function TimelinePanel({
         <button type="button" disabled={!clip} onClick={() => onStep(1)} title="Next frame" aria-label="Next frame">
           <StepForward size={14} aria-hidden="true" />
         </button>
+        <button type="button" disabled={!clip} onClick={() => onSeek(maxFrame)} title="Last frame" aria-label="Last frame">
+          <StepForward size={14} aria-hidden="true" />
+        </button>
       </div>
       <div className="timeline-meta">
         <span className="timeline-clip-name">{clip ? clip.name : 'No clip selected'}</span>
         <span>{clip ? `${formatTimelineTime(currentSeconds)} / ${formatTimelineTime(displayDurationSeconds)}${metadataSuffix}` : '--:--'}</span>
       </div>
       <div
+        ref={rulerRef}
         className={`timeline-ruler ${isDragging ? 'dragging' : ''}`}
         role="slider"
         aria-label="Timeline scrubber"
@@ -598,14 +666,77 @@ function TimelinePanel({
           }
         }}
       >
+        <div className="timeline-loop-range" style={{ left: loopStartProgress, right: `calc(100% - ${loopEndProgress})` }} />
+        <div className="timeline-loop-marker start" style={{ left: loopStartProgress }} />
+        <div className="timeline-loop-marker end" style={{ left: loopEndProgress }} />
         <div className="timeline-fill" style={{ width: progress }} />
+        <div
+          className="timeline-playhead-hit"
+          style={{ left: progress }}
+          onPointerDown={(event) => {
+            if (!clip) {
+              return
+            }
+
+            event.stopPropagation()
+            event.currentTarget.setPointerCapture(event.pointerId)
+            setIsDragging(true)
+            seekFromPointer(event)
+          }}
+          onPointerMove={(event) => {
+            if (isDragging) {
+              seekFromPointer(event)
+            }
+          }}
+          onPointerUp={(event) => {
+            if (isDragging) {
+              seekFromPointer(event)
+            }
+            setIsDragging(false)
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId)
+            }
+          }}
+          onPointerCancel={(event) => {
+            setIsDragging(false)
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId)
+            }
+          }}
+        />
         <div className="timeline-playhead" style={{ left: progress }}>
           <span className="timeline-playhead-handle" />
         </div>
       </div>
       <div className="timeline-readout" aria-label="Timeline readout">
-        <span>{clip ? `F ${frame + 1}/${frameCount}` : 'F --'}</span>
+        <label className="frame-input-label">
+          F
+          <input
+            type="number"
+            min={1}
+            max={frameCount}
+            disabled={!clip}
+            value={clip ? frame + 1 : ''}
+            onChange={(event) => {
+              const nextFrame = Number.parseInt(event.target.value, 10)
+              if (Number.isFinite(nextFrame)) {
+                onSeek(nextFrame - 1)
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.currentTarget.blur()
+              }
+            }}
+          />
+          /{clip ? frameCount : '--'}
+        </label>
         <span>{clip ? `${frameRate.toFixed(2)} fps` : '-- fps'}</span>
+        <span>{clip ? `L ${loopStartFrame + 1}-${loopEndFrame + 1}` : 'L --'}</span>
+        <span className="timeline-range-actions">
+          <button type="button" disabled={!clip} onClick={() => onSetLoopStart(frame)}>In</button>
+          <button type="button" disabled={!clip} onClick={() => onSetLoopEnd(frame)}>Out</button>
+        </span>
       </div>
     </div>
   )
@@ -677,6 +808,32 @@ function ClipInspector({
         </div>
       </section>
       <section className="inspector-section">
+        <h3>Skeleton Match</h3>
+        {clip.skeleton ? (
+          <>
+            <dl>
+              <dt>Coverage</dt>
+              <dd>{`${clip.skeleton.matchedBoneCount}/${clip.skeleton.visualBoneCount} (${Math.round(clip.skeleton.coverage * 100)}%)`}</dd>
+              <dt>Clip bones</dt>
+              <dd>{clip.skeleton.clipBoneCount}</dd>
+              <dt>Missing</dt>
+              <dd>{clip.skeleton.missingCriticalBones.length ? clip.skeleton.missingCriticalBones.join(', ') : 'No critical gaps'}</dd>
+              <dt>Matched</dt>
+              <dd>{formatBoneList(clip.skeleton.matchedBones)}</dd>
+              <dt>Visual only</dt>
+              <dd>{formatBoneList(clip.skeleton.visualOnlyBones)}</dd>
+              <dt>Clip only</dt>
+              <dd>{formatBoneList(clip.skeleton.clipOnlyBones)}</dd>
+            </dl>
+            <div className="coverage-track" aria-label="Skeleton coverage">
+              <span style={{ width: `${Math.min(Math.max(clip.skeleton.coverage, 0), 1) * 100}%` }} />
+            </div>
+          </>
+        ) : (
+          <p className="muted">Skeleton details unavailable</p>
+        )}
+      </section>
+      <section className="inspector-section">
         <h3>Root Motion</h3>
         {clip.rootMotion ? (
           <dl>
@@ -693,6 +850,7 @@ function ClipInspector({
           <p className="muted">No root motion diagnostics</p>
         )}
       </section>
+      <ImportLogPanel entries={clip.importLog} />
     </div>
   )
 }
@@ -723,6 +881,10 @@ function formatRootMotionDelta(rootMotion: NonNullable<ClipResponse['rootMotion'
 
 function formatNumber(value: number) {
   return Number.isFinite(value) ? value.toFixed(2) : '--'
+}
+
+function formatBoneList(values: string[]) {
+  return values.length ? values.join(', ') : '--'
 }
 
 function CharacterInspector({ character }: { character: CharacterResponse }) {
@@ -762,7 +924,27 @@ function CharacterInspector({ character }: { character: CharacterResponse }) {
           ))}
         </div>
       </section>
+      <ImportLogPanel entries={character.importLog} />
     </div>
+  )
+}
+
+function ImportLogPanel({ entries }: { entries: { level: 'info' | 'warning' | 'error'; message: string }[] }) {
+  return (
+    <section className="inspector-section">
+      <h3>Import Log</h3>
+      {entries.length ? (
+        <div className="inspector-log-lines">
+          {entries.map((entry, index) => (
+            <span key={`${entry.level}-${index}-${entry.message}`} className={`log-line ${entry.level}`}>
+              {entry.message}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="muted">No import log entries</p>
+      )}
+    </section>
   )
 }
 

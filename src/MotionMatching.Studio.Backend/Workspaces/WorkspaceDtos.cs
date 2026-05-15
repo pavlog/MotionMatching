@@ -13,7 +13,8 @@ public sealed record CharacterResponse(
     string VisualManifestPath,
     IReadOnlyList<ClipResponse> Clips,
     string? PreviewUrl,
-    ValidationResponse? Validation);
+    ValidationResponse? Validation,
+    IReadOnlyList<ImportLogEntryResponse> ImportLog);
 
 public sealed record ClipResponse(
     string Id,
@@ -27,7 +28,9 @@ public sealed record ClipResponse(
     string? PreviewUrl,
     bool IncludeInBuild,
     RootMotionDiagnosticsResponse? RootMotion,
-    ValidationResponse? Validation);
+    ValidationResponse? Validation,
+    SkeletonValidationResponse? Skeleton,
+    IReadOnlyList<ImportLogEntryResponse> ImportLog);
 
 public sealed record RootMotionDiagnosticsResponse(
     string SourceName,
@@ -46,4 +49,18 @@ public sealed record ValidationResponse(
 public sealed record ValidationFindingResponse(
     string Code,
     string Severity,
+    string Message);
+
+public sealed record SkeletonValidationResponse(
+    int VisualBoneCount,
+    int ClipBoneCount,
+    int MatchedBoneCount,
+    double Coverage,
+    IReadOnlyList<string> MissingCriticalBones,
+    IReadOnlyList<string> MatchedBones,
+    IReadOnlyList<string> VisualOnlyBones,
+    IReadOnlyList<string> ClipOnlyBones);
+
+public sealed record ImportLogEntryResponse(
+    string Level,
     string Message);

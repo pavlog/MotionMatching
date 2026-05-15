@@ -15,6 +15,7 @@ export interface CharacterResponse {
   clips: ClipResponse[]
   previewUrl: string | null
   validation: ValidationResponse | null
+  importLog: ImportLogEntryResponse[]
 }
 
 export interface ClipResponse {
@@ -30,6 +31,8 @@ export interface ClipResponse {
   includeInBuild: boolean
   rootMotion: RootMotionDiagnosticsResponse | null
   validation: ValidationResponse | null
+  skeleton: SkeletonValidationResponse | null
+  importLog: ImportLogEntryResponse[]
 }
 
 export interface RootMotionDiagnosticsResponse {
@@ -51,6 +54,22 @@ export interface ValidationResponse {
 export interface ValidationFindingResponse {
   code: string
   severity: 'info' | 'warning' | 'error'
+  message: string
+}
+
+export interface SkeletonValidationResponse {
+  visualBoneCount: number
+  clipBoneCount: number
+  matchedBoneCount: number
+  coverage: number
+  missingCriticalBones: string[]
+  matchedBones: string[]
+  visualOnlyBones: string[]
+  clipOnlyBones: string[]
+}
+
+export interface ImportLogEntryResponse {
+  level: 'info' | 'warning' | 'error'
   message: string
 }
 
