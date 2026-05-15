@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Move3D, Scan } from 'lucide-react'
+import { Footprints, Move3D, Scan } from 'lucide-react'
 import {
   Animation,
   AnimationGroup,
@@ -80,12 +80,14 @@ export function BabylonViewport({
   const clipSourceNodesRef = useRef<TransformNode[]>([])
   const clipAnimationRef = useRef<AnimationGroup | null>(null)
   const footContactsRef = useRef<FootContactDiagnosticsResponse | null>(null)
+  const showFootContactsRef = useRef(true)
   const contactMarkersRef = useRef<Partial<Record<FootName, Mesh>>>({})
   const characterPoseRef = useRef(new Map<PoseTarget, PoseSnapshot>())
   const clipScrubRef = useRef({ frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate, durationSeconds: clipDurationSeconds })
   const [cameraMode, setCameraMode] = useState<'perspective' | 'orthographic'>('perspective')
   const [status, setStatus] = useState<ViewportStatus>({ kind: 'empty', message: 'Empty scene' })
   const [animationState, setAnimationState] = useState('none')
+  const [showFootContacts, setShowFootContacts] = useState(true)
   const [modelVersion, setModelVersion] = useState(0)
   const statusText = status.kind === 'ready' ? label : status.message
 
@@ -96,6 +98,13 @@ export function BabylonViewport({
   useEffect(() => {
     footContactsRef.current = footContacts
   }, [footContacts])
+
+  useEffect(() => {
+    showFootContactsRef.current = showFootContacts
+    if (!showFootContacts) {
+      hideContactMarkers(contactMarkersRef.current)
+    }
+  }, [showFootContacts])
 
   useEffect(() => {
     onAnimationStateChange?.(animationState)
@@ -324,7 +333,7 @@ export function BabylonViewport({
     engine.runRenderLoop(() => {
       updateOrthographicBounds()
       updateNavigationWidget()
-      updateContactMarkers(scene, clipScrubRef.current, footContactsRef.current, contactMarkersRef.current)
+      updateContactMarkers(scene, clipScrubRef.current, footContactsRef.current, contactMarkersRef.current, showFootContactsRef.current)
       scene.render()
     })
 
@@ -516,6 +525,17 @@ export function BabylonViewport({
         >
           <Move3D size={15} aria-hidden="true" />
         </button>
+        <button
+          type="button"
+          className={showFootContacts ? 'active' : ''}
+          disabled={!footContacts}
+          onClick={() => setShowFootContacts((current) => !current)}
+          title={showFootContacts ? 'Hide foot contacts' : 'Show foot contacts'}
+          aria-label="Toggle foot contacts"
+          aria-pressed={showFootContacts}
+        >
+          <Footprints size={15} aria-hidden="true" />
+        </button>
       </div>
       <div className="navigation-widget" aria-label="Viewport navigation">
         <svg ref={axisTriadRef} className="axis-triad" viewBox="0 0 96 96" role="group" aria-label="Axis view shortcuts">
@@ -577,8 +597,9 @@ function updateContactMarkers(
   scrub: { frame: number | null; frameCount: number | null; frameRate: number | null; durationSeconds: number | null },
   footContacts: FootContactDiagnosticsResponse | null,
   markers: Partial<Record<FootName, Mesh>>,
+  showFootContacts: boolean,
 ) {
-  if (!footContacts || scrub.frame === null || !scrub.frameRate || scrub.frameRate <= 0) {
+  if (!showFootContacts || !footContacts || scrub.frame === null || !scrub.frameRate || scrub.frameRate <= 0) {
     hideContactMarkers(markers)
     return
   }
