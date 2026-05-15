@@ -25,7 +25,19 @@ public sealed record ClipResponse(
     double? FrameRate,
     double? DurationSeconds,
     string? PreviewUrl,
-    bool IncludeInBuild);
+    bool IncludeInBuild,
+    RootMotionDiagnosticsResponse? RootMotion,
+    ValidationResponse? Validation);
+
+public sealed record RootMotionDiagnosticsResponse(
+    string SourceName,
+    int KeyCount,
+    double DurationSeconds,
+    double DisplacementX,
+    double DisplacementY,
+    double DisplacementZ,
+    double HorizontalDistance,
+    double AverageHorizontalSpeed);
 
 public sealed record ValidationResponse(
     bool CanCompile,

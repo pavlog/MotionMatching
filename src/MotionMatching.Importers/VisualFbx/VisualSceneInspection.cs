@@ -32,4 +32,7 @@ public sealed record SkinnedMeshSummary(
 
 public sealed record SkeletonSummary(
     string RootBoneName,
-    int BoneCount);
+    int BoneCount)
+{
+    public IReadOnlyList<string> BoneNames { get; init; } = [];
+}

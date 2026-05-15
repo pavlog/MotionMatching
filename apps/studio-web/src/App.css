@@ -253,7 +253,7 @@
 
 .timeline-strip {
   display: grid;
-  grid-template-columns: auto minmax(150px, 220px) minmax(0, 1fr);
+  grid-template-columns: auto minmax(170px, 240px) minmax(0, 1fr) minmax(92px, 116px);
   min-width: 0;
   align-items: center;
   gap: 8px;
@@ -305,28 +305,90 @@
   white-space: nowrap;
 }
 
+.timeline-clip-name {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
 .timeline-ruler {
   position: relative;
   min-width: 0;
-  height: 24px;
+  height: 28px;
   border: 1px solid var(--border);
-  background: repeating-linear-gradient(
-    90deg,
-    transparent 0,
-    transparent 39px,
-    rgba(255, 255, 255, 0.08) 40px
-  );
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 23px,
+      rgba(255, 255, 255, 0.055) 24px,
+      transparent 25px,
+      transparent 47px,
+      rgba(255, 255, 255, 0.1) 48px
+    );
   cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.timeline-ruler:focus-visible {
+  outline: 1px solid rgba(104, 183, 255, 0.75);
+  outline-offset: 2px;
+}
+
+.timeline-ruler.dragging {
+  border-color: rgba(104, 183, 255, 0.55);
+  background-color: rgba(104, 183, 255, 0.08);
+  cursor: grabbing;
 }
 
 .timeline-playhead {
   position: absolute;
-  top: -1px;
-  bottom: -1px;
+  top: -2px;
+  bottom: -2px;
   width: 1px;
   background: #68b7ff;
   box-shadow: 0 0 0 1px rgba(104, 183, 255, 0.26);
   pointer-events: none;
+}
+
+.timeline-playhead-handle {
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(12, 15, 19, 0.72);
+  border-radius: 3px;
+  background: #68b7ff;
+  box-shadow: 0 0 0 2px rgba(104, 183, 255, 0.22);
+  transform: translateX(-50%);
+}
+
+.timeline-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(104, 183, 255, 0.12);
+  pointer-events: none;
+}
+
+.timeline-readout {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  color: var(--text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-readout span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-strip {
@@ -623,6 +685,12 @@
 .icon-button:hover,
 .viewport-toolbar button:hover {
   background: var(--surface-3);
+}
+
+.viewport-toolbar button.active {
+  border-color: rgba(104, 183, 255, 0.55);
+  color: #68b7ff;
+  background: rgba(104, 183, 255, 0.14);
 }
 
 .log-lines {

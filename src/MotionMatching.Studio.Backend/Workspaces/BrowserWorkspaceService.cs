@@ -13,17 +13,20 @@ public sealed class BrowserWorkspaceService
     private readonly StudioBackendOptions _options;
     private readonly IVisualFbxInspector _visualInspector;
     private readonly IClipTimelineExtractor _clipTimelineExtractor;
+    private readonly ISkeletonNameExtractor _skeletonNameExtractor;
     private readonly PreviewGlbCacheService _previewCache;
 
     public BrowserWorkspaceService(
         IOptions<StudioBackendOptions> options,
         IVisualFbxInspector visualInspector,
         IClipTimelineExtractor clipTimelineExtractor,
+        ISkeletonNameExtractor skeletonNameExtractor,
         PreviewGlbCacheService previewCache)
     {
         _options = options.Value;
         _visualInspector = visualInspector;
         _clipTimelineExtractor = clipTimelineExtractor;
+        _skeletonNameExtractor = skeletonNameExtractor;
         _previewCache = previewCache;
     }
 
@@ -323,6 +326,10 @@ public sealed class BrowserWorkspaceService
                 clip,
                 sourcePath,
                 cancellationToken);
+            var rootMotion = previewUrl is not null
+                ? TryReadRootMotionDiagnostics(GetClipPreviewPath(clipRoot))
+                : null;
+            var validation = await ValidateClipSkeletonAsync(characterRoot, clip, sourcePath, cancellationToken);
 
             clips.Add(new ClipResponse(
                 clip.Id.Value,
@@ -334,10 +341,85 @@ public sealed class BrowserWorkspaceService
                 clip.FrameRate,
                 clip.DurationSeconds,
                 previewUrl,
-                clip.IncludeInBuild));
+                clip.IncludeInBuild,
+                rootMotion,
+                validation));
         }
 
         return clips;
+    }
+
+    private async Task<ValidationResponse> ValidateClipSkeletonAsync(
+        string characterRoot,
+        ClipManifest clip,
+        string sourcePath,
+        CancellationToken cancellationToken)
+    {
+        var visualSourcePath = Path.Combine(characterRoot, "Visual", "source.fbx");
+        var visualSkeleton = await _skeletonNameExtractor.ExtractAsync(visualSourcePath, ClipSourceKind.Fbx, cancellationToken);
+        var clipSkeleton = await _skeletonNameExtractor.ExtractAsync(sourcePath, clip.SourceKind, cancellationToken);
+        var findings = new List<ValidationFindingResponse>();
+
+        if (!visualSkeleton.Succeeded)
+        {
+            findings.Add(new ValidationFindingResponse(
+                "visual_skeleton_unavailable",
+                "warning",
+                $"Visual skeleton could not be inspected: {visualSkeleton.Error}"));
+        }
+
+        if (!clipSkeleton.Succeeded)
+        {
+            findings.Add(new ValidationFindingResponse(
+                "clip_skeleton_unavailable",
+                "warning",
+                $"Clip skeleton could not be inspected: {clipSkeleton.Error}"));
+        }
+
+        if (!visualSkeleton.Succeeded || !clipSkeleton.Succeeded)
+        {
+            return new ValidationResponse(true, findings);
+        }
+
+        var visualBones = NormalizeBoneNames(visualSkeleton.BoneNames);
+        var clipBones = NormalizeBoneNames(clipSkeleton.BoneNames);
+        if (visualBones.Count == 0 || clipBones.Count == 0)
+        {
+            findings.Add(new ValidationFindingResponse(
+                "empty_skeleton",
+                "warning",
+                "Visual or clip skeleton has no named bones to compare."));
+            return new ValidationResponse(true, findings);
+        }
+
+        var matchedCount = visualBones.Count(bone => clipBones.Contains(bone));
+        if (matchedCount == 0)
+        {
+            findings.Add(new ValidationFindingResponse(
+                "skeleton_unmatched",
+                "error",
+                "Clip skeleton has no matching bone names with the visual skeleton."));
+            return new ValidationResponse(false, findings);
+        }
+
+        var coverage = matchedCount / (double)visualBones.Count;
+        if (coverage < 0.65)
+        {
+            findings.Add(new ValidationFindingResponse(
+                "skeleton_partial_match",
+                "warning",
+                $"Clip skeleton matches {matchedCount}/{visualBones.Count} visual bones."));
+        }
+
+        if (!clipBones.Contains("hips") && !clipBones.Contains("pelvis") && !clipBones.Contains("root"))
+        {
+            findings.Add(new ValidationFindingResponse(
+                "root_motion_source_missing",
+                "warning",
+                "Clip skeleton has no obvious Hips/Pelvis/Root bone for root motion preview."));
+        }
+
+        return new ValidationResponse(!findings.Any(finding => finding.Severity == "error"), findings);
     }
 
     private async Task<string?> TryGenerateClipPreviewUrlAsync(
@@ -353,7 +435,7 @@ public sealed class BrowserWorkspaceService
         }
 
         var clipRoot = Path.GetDirectoryName(sourcePath) ?? characterRoot;
-        var previewPath = Path.Combine(clipRoot, "Cache", "Preview", "clip.glb");
+        var previewPath = GetClipPreviewPath(clipRoot);
         var result = await _previewCache.GenerateAsync(sourcePath, previewPath, cancellationToken);
         if (!result.Succeeded || !File.Exists(previewPath))
         {
@@ -363,6 +445,39 @@ public sealed class BrowserWorkspaceService
         var characterFolderName = Path.GetFileName(characterRoot);
         var clipRelativeRoot = Path.GetDirectoryName(relativeManifestPath)?.Replace('\\', '/') ?? string.Empty;
         return ToAssetUrl("Characters", characterFolderName, clipRelativeRoot, "Cache", "Preview", "clip.glb");
+    }
+
+    private static string GetClipPreviewPath(string clipRoot)
+    {
+        return Path.Combine(clipRoot, "Cache", "Preview", "clip.glb");
+    }
+
+    private static RootMotionDiagnosticsResponse? TryReadRootMotionDiagnostics(string previewPath)
+    {
+        if (!File.Exists(previewPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var diagnostics = GltfRootMotionDiagnosticsParser.ParseGlb(previewPath);
+            return diagnostics is null
+                ? null
+                : new RootMotionDiagnosticsResponse(
+                    diagnostics.SourceName,
+                    diagnostics.KeyCount,
+                    diagnostics.DurationSeconds,
+                    diagnostics.DisplacementX,
+                    diagnostics.DisplacementY,
+                    diagnostics.DisplacementZ,
+                    diagnostics.HorizontalDistance,
+                    diagnostics.AverageHorizontalSpeed);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<ClipManifest> PopulateClipTimelineMetadataAsync(
@@ -389,6 +504,28 @@ public sealed class BrowserWorkspaceService
             FrameRate = timeline.FrameRate,
             DurationSeconds = timeline.DurationSeconds
         };
+    }
+
+    private static HashSet<string> NormalizeBoneNames(IEnumerable<string> boneNames)
+    {
+        return boneNames
+            .Select(NormalizeBoneName)
+            .Where(name => name.Length > 0)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static string NormalizeBoneName(string name)
+    {
+        var normalized = name.Trim().ToLowerInvariant();
+        foreach (var prefix in new[] { "mixamorig:", "mixamorig_", "armature|", "armature/" })
+        {
+            if (normalized.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                normalized = normalized[prefix.Length..];
+            }
+        }
+
+        return normalized.Replace(" ", string.Empty, StringComparison.Ordinal);
     }
 
     private static ClipTimelineMetadata? TryReadBvhTimelineMetadata(string sourcePath)

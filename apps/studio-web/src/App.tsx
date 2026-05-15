@@ -34,15 +34,19 @@ type ClipContextMenu = {
 
 const fallbackFrameCount = 120
 const fallbackFrameRate = 24
+type ClipMotionMode = 'inPlace' | 'rootMotion'
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const clipInputRef = useRef<HTMLInputElement>(null)
+  const timelineFrameRef = useRef(0)
   const [workspace, setWorkspace] = useState<WorkspaceResponse | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const [timelineFrame, setTimelineFrame] = useState(0)
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false)
+  const [animationPreviewState, setAnimationPreviewState] = useState('none')
+  const [clipMotionMode, setClipMotionMode] = useState<ClipMotionMode>('inPlace')
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenu | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([
     { id: 1, level: 'info', message: 'Ready' },
@@ -58,8 +62,13 @@ function App() {
   )
   const timelineFrameCount = selectedClip?.frameCount ?? fallbackFrameCount
   const timelineFrameRate = selectedClip?.frameRate ?? fallbackFrameRate
-  const visibleTimelineFrame = Math.min(timelineFrame, timelineFrameCount)
+  const maxTimelineFrame = Math.max(timelineFrameCount - 1, 0)
+  const visibleTimelineFrame = Math.min(timelineFrame, maxTimelineFrame)
   const hasClipTimelineMetadata = Boolean(selectedClip?.frameCount && selectedClip.frameRate && selectedClip.durationSeconds)
+
+  useEffect(() => {
+    timelineFrameRef.current = visibleTimelineFrame
+  }, [visibleTimelineFrame])
 
   const appendLog = useCallback((message: string, level: LogEntry['level'] = 'info') => {
     setLogs((current) => [
@@ -73,8 +82,9 @@ function App() {
   }, [])
 
   const stepTimeline = useCallback((delta: number) => {
-    setTimelineFrame((current) => Math.min(Math.max(current + delta, 0), timelineFrameCount))
-  }, [timelineFrameCount])
+    setIsTimelinePlaying(false)
+    setTimelineFrame((current) => Math.min(Math.max(current + delta, 0), maxTimelineFrame))
+  }, [maxTimelineFrame])
 
   const resetTimeline = useCallback(() => {
     setTimelineFrame(0)
@@ -104,16 +114,32 @@ function App() {
   }, [selectClip])
 
   useEffect(() => {
-    if (!isTimelinePlaying || !selectedClip) {
+    if (!isTimelinePlaying || !selectedClip || maxTimelineFrame <= 0) {
       return
     }
 
-    const intervalId = window.setInterval(() => {
-      setTimelineFrame((current) => current >= timelineFrameCount ? 0 : current + 1)
-    }, 1000 / timelineFrameRate)
+    const startFrame = timelineFrameRef.current
+    const startTime = window.performance.now()
+    const frameSpan = maxTimelineFrame + 1
+    let animationFrameId = 0
+    let lastFrame = startFrame
 
-    return () => window.clearInterval(intervalId)
-  }, [isTimelinePlaying, selectedClip, timelineFrameCount, timelineFrameRate])
+    const tick = (now: number) => {
+      const elapsedSeconds = (now - startTime) / 1000
+      const elapsedFrames = Math.floor(elapsedSeconds * timelineFrameRate)
+      const nextFrame = (startFrame + elapsedFrames) % frameSpan
+
+      if (nextFrame !== lastFrame) {
+        lastFrame = nextFrame
+        setTimelineFrame(nextFrame)
+      }
+
+      animationFrameId = window.requestAnimationFrame(tick)
+    }
+
+    animationFrameId = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(animationFrameId)
+  }, [isTimelinePlaying, maxTimelineFrame, selectedClip, timelineFrameRate])
 
   useEffect(() => {
     const handleTimelineKeys = (event: KeyboardEvent) => {
@@ -138,14 +164,14 @@ function App() {
         event.preventDefault()
       }
       if (event.key === 'End') {
-        setTimelineFrame(timelineFrameCount)
+        setTimelineFrame(maxTimelineFrame)
         event.preventDefault()
       }
     }
 
     window.addEventListener('keydown', handleTimelineKeys)
     return () => window.removeEventListener('keydown', handleTimelineKeys)
-  }, [selectedClip, stepTimeline, timelineFrameCount])
+  }, [maxTimelineFrame, selectedClip, stepTimeline])
 
   useEffect(() => {
     if (!clipContextMenu) {
@@ -365,7 +391,7 @@ function App() {
                     onClick={() => selectClip(character.id, clip.id)}
                     onContextMenu={(event) => openClipContextMenu(event, character.id, clip)}
                   >
-                    <Film size={15} aria-hidden="true" />
+                    {clipValidationIcon(clip)}
                     <span>{clip.name}</span>
                   </button>
                 ))}
@@ -382,7 +408,10 @@ function App() {
           clipFrame={selectedClip ? visibleTimelineFrame : null}
           clipFrameCount={selectedClip ? timelineFrameCount : null}
           clipFrameRate={selectedClip?.frameRate ?? null}
+          clipMotionMode={clipMotionMode}
           label={selectedClip ? `${selectedCharacter?.name ?? 'Character'} / ${selectedClip.name}` : selectedCharacter?.name ?? 'Empty scene'}
+          onClipMotionModeChange={setClipMotionMode}
+          onAnimationStateChange={setAnimationPreviewState}
         />
       </section>
 
@@ -394,7 +423,7 @@ function App() {
           </span>
         </header>
         {selectedClip && selectedCharacter ? (
-          <ClipInspector character={selectedCharacter} clip={selectedClip} />
+          <ClipInspector character={selectedCharacter} clip={selectedClip} animationPreviewState={animationPreviewState} clipMotionMode={clipMotionMode} />
         ) : selectedCharacter ? (
           <CharacterInspector character={selectedCharacter} />
         ) : (
@@ -409,6 +438,7 @@ function App() {
           clip={selectedClip}
           frame={visibleTimelineFrame}
           frameCount={timelineFrameCount}
+          frameRate={timelineFrameRate}
           hasMetadata={hasClipTimelineMetadata}
           isPlaying={isTimelinePlaying}
           onTogglePlay={() => selectedClip && setIsTimelinePlaying((current) => !current)}
@@ -457,6 +487,7 @@ function TimelinePanel({
   clip,
   frame,
   frameCount,
+  frameRate,
   hasMetadata,
   isPlaying,
   onTogglePlay,
@@ -466,13 +497,28 @@ function TimelinePanel({
   clip: ClipResponse | null
   frame: number
   frameCount: number
+  frameRate: number
   hasMetadata: boolean
   isPlaying: boolean
   onTogglePlay: () => void
   onStep: (delta: number) => void
   onSeek: (frame: number) => void
 }) {
-  const progress = `${(frame / frameCount) * 100}%`
+  const [isDragging, setIsDragging] = useState(false)
+  const maxFrame = Math.max(frameCount - 1, 0)
+  const progress = `${maxFrame > 0 ? (frame / maxFrame) * 100 : 0}%`
+  const displayDurationSeconds = frameCount / Math.max(frameRate, 1)
+  const currentSeconds = frame / Math.max(frameRate, 1)
+  const metadataSuffix = hasMetadata ? '' : ' estimated'
+  const seekFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!clip) {
+      return
+    }
+
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const ratio = (event.clientX - bounds.left) / Math.max(bounds.width, 1)
+    onSeek(Math.round(Math.min(Math.max(ratio, 0), 1) * maxFrame))
+  }
 
   return (
     <div className="timeline-strip">
@@ -488,25 +534,102 @@ function TimelinePanel({
         </button>
       </div>
       <div className="timeline-meta">
-        <span>{clip ? clip.name : 'No clip selected'}</span>
-        <span>{clip ? `Frame ${frame}/${frameCount}${hasMetadata ? '' : ' estimated'}` : 'Frame --'}</span>
+        <span className="timeline-clip-name">{clip ? clip.name : 'No clip selected'}</span>
+        <span>{clip ? `${formatTimelineTime(currentSeconds)} / ${formatTimelineTime(displayDurationSeconds)}${metadataSuffix}` : '--:--'}</span>
       </div>
-      <div className="timeline-ruler" onClick={(event) => {
-        if (!clip) {
-          return
-        }
+      <div
+        className={`timeline-ruler ${isDragging ? 'dragging' : ''}`}
+        role="slider"
+        aria-label="Timeline scrubber"
+        aria-valuemin={clip ? 1 : 0}
+        aria-valuemax={clip ? frameCount : 0}
+        aria-valuenow={clip ? frame + 1 : 0}
+        aria-valuetext={clip ? `Frame ${frame + 1} of ${frameCount}` : undefined}
+        tabIndex={clip ? 0 : -1}
+        onPointerDown={(event) => {
+          if (!clip) {
+            return
+          }
 
-        const bounds = event.currentTarget.getBoundingClientRect()
-        const ratio = (event.clientX - bounds.left) / Math.max(bounds.width, 1)
-        onSeek(Math.round(Math.min(Math.max(ratio, 0), 1) * frameCount))
-      }}>
-        <div className="timeline-playhead" style={{ left: progress }} />
+          event.currentTarget.setPointerCapture(event.pointerId)
+          setIsDragging(true)
+          seekFromPointer(event)
+        }}
+        onPointerMove={(event) => {
+          if (isDragging) {
+            seekFromPointer(event)
+          }
+        }}
+        onPointerUp={(event) => {
+          if (isDragging) {
+            seekFromPointer(event)
+          }
+          setIsDragging(false)
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId)
+          }
+        }}
+        onPointerCancel={(event) => {
+          setIsDragging(false)
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId)
+          }
+        }}
+        onKeyDown={(event) => {
+          if (!clip) {
+            return
+          }
+
+          if (event.key === 'ArrowLeft') {
+            onStep(event.shiftKey ? -10 : -1)
+            event.preventDefault()
+          }
+          if (event.key === 'ArrowRight') {
+            onStep(event.shiftKey ? 10 : 1)
+            event.preventDefault()
+          }
+          if (event.key === 'Home') {
+            onSeek(0)
+            event.preventDefault()
+          }
+          if (event.key === 'End') {
+            onSeek(maxFrame)
+            event.preventDefault()
+          }
+        }}
+      >
+        <div className="timeline-fill" style={{ width: progress }} />
+        <div className="timeline-playhead" style={{ left: progress }}>
+          <span className="timeline-playhead-handle" />
+        </div>
+      </div>
+      <div className="timeline-readout" aria-label="Timeline readout">
+        <span>{clip ? `F ${frame + 1}/${frameCount}` : 'F --'}</span>
+        <span>{clip ? `${frameRate.toFixed(2)} fps` : '-- fps'}</span>
       </div>
     </div>
   )
 }
 
-function ClipInspector({ character, clip }: { character: CharacterResponse; clip: ClipResponse }) {
+function formatTimelineTime(seconds: number) {
+  if (!Number.isFinite(seconds)) {
+    return '0.000s'
+  }
+
+  return `${Math.max(seconds, 0).toFixed(3)}s`
+}
+
+function ClipInspector({
+  character,
+  clip,
+  animationPreviewState,
+  clipMotionMode,
+}: {
+  character: CharacterResponse
+  clip: ClipResponse
+  animationPreviewState: string
+  clipMotionMode: ClipMotionMode
+}) {
   return (
     <div className="inspector-content">
       <section className="inspector-section">
@@ -528,14 +651,78 @@ function ClipInspector({ character, clip }: { character: CharacterResponse; clip
           <dd>{clip.frameCount && clip.frameRate && clip.durationSeconds ? `${clip.frameCount} frames, ${clip.frameRate.toFixed(2)} fps, ${clip.durationSeconds.toFixed(2)}s` : 'Not parsed yet'}</dd>
           <dt>Preview</dt>
           <dd>{clip.previewUrl ? 'Animation cache ready' : 'No animation cache'}</dd>
+          <dt>Retarget</dt>
+          <dd>{formatAnimationPreviewState(animationPreviewState)}</dd>
+          <dt>Motion</dt>
+          <dd>{clipMotionMode === 'rootMotion' ? 'Root motion' : 'In-place'}</dd>
         </dl>
       </section>
       <section className="inspector-section">
         <h3>Validation</h3>
-        <p className="muted">Clip skeleton checks are not connected yet.</p>
+        {clip.validation ? (
+          <div className={`validation-summary ${clip.validation.canCompile ? 'ok' : 'blocked'}`}>
+            {clip.validation.canCompile ? <CheckCircle2 size={16} aria-hidden="true" /> : <AlertCircle size={16} aria-hidden="true" />}
+            <span>{clip.validation.canCompile ? 'Ready for preview' : 'Blocked'}</span>
+          </div>
+        ) : (
+          <p className="muted">Not checked</p>
+        )}
+        <div className="finding-list">
+          {clip.validation?.findings.map((finding) => (
+            <div key={`${finding.severity}-${finding.code}`} className={`finding ${finding.severity}`}>
+              <strong>{finding.code}</strong>
+              <span>{finding.message}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="inspector-section">
+        <h3>Root Motion</h3>
+        {clip.rootMotion ? (
+          <dl>
+            <dt>Source</dt>
+            <dd>{clip.rootMotion.sourceName}</dd>
+            <dt>Keys</dt>
+            <dd>{clip.rootMotion.keyCount}</dd>
+            <dt>Delta</dt>
+            <dd>{formatRootMotionDelta(clip.rootMotion)}</dd>
+            <dt>XZ</dt>
+            <dd>{`${formatNumber(clip.rootMotion.horizontalDistance)} units, ${formatNumber(clip.rootMotion.averageHorizontalSpeed)} u/s`}</dd>
+          </dl>
+        ) : (
+          <p className="muted">No root motion diagnostics</p>
+        )}
       </section>
     </div>
   )
+}
+
+function formatAnimationPreviewState(state: string) {
+  if (state.startsWith('applied:')) {
+    return `${state.slice('applied:'.length)} tracks applied`
+  }
+
+  if (state === 'loading') {
+    return 'Loading animation'
+  }
+
+  if (state === 'unmatched') {
+    return 'No matching tracks'
+  }
+
+  if (state === 'failed') {
+    return 'Preview failed'
+  }
+
+  return 'Not active'
+}
+
+function formatRootMotionDelta(rootMotion: NonNullable<ClipResponse['rootMotion']>) {
+  return `X ${formatNumber(rootMotion.displacementX)}, Y ${formatNumber(rootMotion.displacementY)}, Z ${formatNumber(rootMotion.displacementZ)}`
+}
+
+function formatNumber(value: number) {
+  return Number.isFinite(value) ? value.toFixed(2) : '--'
 }
 
 function CharacterInspector({ character }: { character: CharacterResponse }) {
@@ -589,6 +776,22 @@ function validationIcon(character: CharacterResponse) {
   }
 
   if (character.validation.findings.some((finding) => finding.severity === 'warning')) {
+    return <TriangleAlert size={15} aria-hidden="true" className="status-warning" />
+  }
+
+  return <CheckCircle2 size={15} aria-hidden="true" className="status-ok" />
+}
+
+function clipValidationIcon(clip: ClipResponse) {
+  if (!clip.validation) {
+    return <Film size={15} aria-hidden="true" />
+  }
+
+  if (clip.validation.findings.some((finding) => finding.severity === 'error')) {
+    return <AlertCircle size={15} aria-hidden="true" className="status-error" />
+  }
+
+  if (clip.validation.findings.some((finding) => finding.severity === 'warning')) {
     return <TriangleAlert size={15} aria-hidden="true" className="status-warning" />
   }
 

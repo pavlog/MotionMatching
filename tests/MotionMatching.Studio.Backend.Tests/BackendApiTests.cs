@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using MotionMatching.Authoring;
 using MotionMatching.Importers;
 
 namespace MotionMatching.Studio.Backend.Tests;
@@ -222,6 +223,8 @@ public sealed class BackendApiTests : IAsyncLifetime
                 {
                     services.RemoveAll<IClipTimelineExtractor>();
                     services.AddSingleton<IClipTimelineExtractor, FakeClipTimelineExtractor>();
+                    services.RemoveAll<ISkeletonNameExtractor>();
+                    services.AddSingleton<ISkeletonNameExtractor, FakeSkeletonNameExtractor>();
                 });
             });
     }
@@ -231,6 +234,21 @@ public sealed class BackendApiTests : IAsyncLifetime
         public Task<ClipTimelineMetadata?> ExtractAsync(string assetPath, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<ClipTimelineMetadata?>(new ClipTimelineMetadata(20, 30, 0.6333333333333333));
+        }
+    }
+
+    private sealed class FakeSkeletonNameExtractor : ISkeletonNameExtractor
+    {
+        public Task<SkeletonNameExtractionResult> ExtractAsync(
+            string assetPath,
+            ClipSourceKind sourceKind,
+            CancellationToken cancellationToken = default)
+        {
+            var names = assetPath.Contains($"{Path.DirectorySeparatorChar}Visual{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                ? new[] { "Hips", "Spine", "Head", "LeftUpLeg", "RightUpLeg" }
+                : new[] { "Hips", "Spine", "Head", "LeftUpLeg", "RightUpLeg" };
+
+            return Task.FromResult(SkeletonNameExtractionResult.Success(names));
         }
     }
 }

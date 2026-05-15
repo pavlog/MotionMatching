@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Scan } from 'lucide-react'
+import { Move3D, Scan } from 'lucide-react'
 import {
+  Animation,
   AnimationGroup,
   ArcRotateCamera,
   Bone,
@@ -25,11 +26,15 @@ interface BabylonViewportProps {
   clipFrame: number | null
   clipFrameCount: number | null
   clipFrameRate: number | null
+  clipMotionMode: ClipMotionMode
   label: string
+  onClipMotionModeChange?: (mode: ClipMotionMode) => void
+  onAnimationStateChange?: (state: string) => void
 }
 
 type CameraView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso'
 type AxisName = 'x' | 'negX' | 'y' | 'negY' | 'z' | 'negZ'
+type ClipMotionMode = 'inPlace' | 'rootMotion'
 type PoseTarget = Bone | TransformNode
 type PoseSnapshot = {
   position: Vector3
@@ -49,7 +54,17 @@ function getPerspectiveHalfHeight(camera: ArcRotateCamera, radius: number) {
   return Math.max(radius * Math.tan(camera.fov * 0.5), 0.01)
 }
 
-export function BabylonViewport({ previewUrl, clipPreviewUrl, clipFrame, clipFrameCount, clipFrameRate, label }: BabylonViewportProps) {
+export function BabylonViewport({
+  previewUrl,
+  clipPreviewUrl,
+  clipFrame,
+  clipFrameCount,
+  clipFrameRate,
+  clipMotionMode,
+  label,
+  onClipMotionModeChange,
+  onAnimationStateChange,
+}: BabylonViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const sceneRef = useRef<Scene | null>(null)
   const cameraRef = useRef<ArcRotateCamera | null>(null)
@@ -68,6 +83,10 @@ export function BabylonViewport({ previewUrl, clipPreviewUrl, clipFrame, clipFra
   useEffect(() => {
     clipScrubRef.current = { frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate }
   }, [clipFrame, clipFrameCount, clipFrameRate])
+
+  useEffect(() => {
+    onAnimationStateChange?.(animationState)
+  }, [animationState, onAnimationStateChange])
 
   const applyClipFrame = useCallback((animationGroup: AnimationGroup) => {
     const { frame, frameCount, frameRate } = clipScrubRef.current
@@ -419,7 +438,7 @@ export function BabylonViewport({ previewUrl, clipPreviewUrl, clipFrame, clipFra
 
         clipSourceNodesRef.current = result.transformNodes.filter((node): node is TransformNode => node instanceof TransformNode)
         const sourceGroup = result.animationGroups[0]
-        const retargeted = sourceGroup ? retargetAnimationGroup(sourceGroup, targetMap) : null
+        const retargeted = sourceGroup ? retargetAnimationGroup(sourceGroup, targetMap, clipMotionMode) : null
         for (const group of result.animationGroups) {
           group.dispose()
         }
@@ -449,7 +468,7 @@ export function BabylonViewport({ previewUrl, clipPreviewUrl, clipFrame, clipFra
     return () => {
       cancelled = true
     }
-  }, [applyClipFrame, clipPreviewUrl, modelVersion, restoreCharacterPose])
+  }, [applyClipFrame, clipMotionMode, clipPreviewUrl, modelVersion, restoreCharacterPose])
 
   useEffect(() => {
     const animationGroup = clipAnimationRef.current
@@ -467,6 +486,17 @@ export function BabylonViewport({ previewUrl, clipPreviewUrl, clipFrame, clipFra
       <div className="viewport-toolbar" aria-label="Viewport tools">
         <button type="button" onClick={frameMeshes} title="Frame selection" aria-label="Frame selection">
           <Scan size={15} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={clipMotionMode === 'rootMotion' ? 'active' : ''}
+          disabled={!clipPreviewUrl}
+          onClick={() => onClipMotionModeChange?.(clipMotionMode === 'rootMotion' ? 'inPlace' : 'rootMotion')}
+          title={clipMotionMode === 'rootMotion' ? 'Root motion' : 'In-place'}
+          aria-label="Toggle root motion"
+          aria-pressed={clipMotionMode === 'rootMotion'}
+        >
+          <Move3D size={15} aria-hidden="true" />
         </button>
       </div>
       <div className="navigation-widget" aria-label="Viewport navigation">
@@ -576,7 +606,7 @@ function normalizeTargetName(name: string | undefined) {
   return name?.replace(/^mixamorig[:_]/i, '').replace(/^Armature[|/]/i, '').trim().toLowerCase() ?? ''
 }
 
-function retargetAnimationGroup(sourceGroup: AnimationGroup, targetMap: Map<string, unknown>) {
+function retargetAnimationGroup(sourceGroup: AnimationGroup, targetMap: Map<string, unknown>, clipMotionMode: ClipMotionMode) {
   const retargetedGroup = new AnimationGroup(`${sourceGroup.name || 'clip'}-retargeted`)
   let retargetedCount = 0
 
@@ -592,7 +622,7 @@ function retargetAnimationGroup(sourceGroup: AnimationGroup, targetMap: Map<stri
       continue
     }
 
-    retargetedGroup.addTargetedAnimation(targetedAnimation.animation.clone(), target)
+    retargetedGroup.addTargetedAnimation(cloneRetargetAnimation(targetedAnimation.animation, sourceName, clipMotionMode), target)
     retargetedCount++
   }
 
@@ -611,10 +641,71 @@ function shouldRetargetAnimationProperty(targetProperty: string, sourceName: str
   }
 
   if (property.includes('position') || property.includes('translation')) {
-    return sourceName === 'hips' || sourceName === 'root' || sourceName === 'skeleton'
+    return isRootMotionSource(sourceName)
   }
 
   return true
+}
+
+function cloneRetargetAnimation(animation: Animation, sourceName: string, clipMotionMode: ClipMotionMode) {
+  const cloned = animation.clone()
+  const property = cloned.targetProperty.toLowerCase()
+  const isTranslationTrack = property.includes('position') || property.includes('translation')
+  const isRotationTrack = property.includes('rotation') || property.includes('quaternion')
+  if (clipMotionMode !== 'inPlace' || !isRootMotionSource(sourceName) || (!isTranslationTrack && !isRotationTrack)) {
+    return cloned
+  }
+
+  const keys = cloned.getKeys()
+  const firstValue = keys.find((key) => key.value !== undefined)?.value
+  if (isTopLevelRootMotionSource(sourceName) && isRotationTrack && firstValue !== undefined) {
+    cloned.setKeys(keys.map((key) => ({
+      ...key,
+      value: cloneAnimationKeyValue(firstValue),
+    })))
+    return cloned
+  }
+
+  if (!isTranslationTrack) {
+    return cloned
+  }
+
+  const firstVector = keys.find((key) => key.value instanceof Vector3)?.value
+  if (!(firstVector instanceof Vector3)) {
+    return cloned
+  }
+
+  cloned.setKeys(keys.map((key) => {
+    if (!(key.value instanceof Vector3)) {
+      return key
+    }
+
+    return {
+      ...key,
+      value: new Vector3(firstVector.x, key.value.y, firstVector.z),
+    }
+  }))
+  return cloned
+}
+
+function isRootMotionSource(sourceName: string) {
+  return sourceName === 'hips' || sourceName === 'pelvis' || isTopLevelRootMotionSource(sourceName)
+}
+
+function isTopLevelRootMotionSource(sourceName: string) {
+  return sourceName === 'root' || sourceName === 'skeleton'
+}
+
+function cloneAnimationKeyValue(value: unknown) {
+  if (value instanceof Vector3 || value instanceof Quaternion) {
+    return value.clone()
+  }
+
+  if (Array.isArray(value)) {
+    return [...value]
+  }
+
+  return value
 }
 
 function createGroundGrid(scene: Scene) {

@@ -8,6 +8,7 @@ public static class GltfAnimationTimelineParser
 {
     private const uint GlbMagic = 0x46546C67;
     private const uint JsonChunkType = 0x4E4F534A;
+    private const double DurationEpsilon = 0.000001;
 
     public static ClipTimelineMetadata? ParseGlb(string glbPath)
     {
@@ -38,7 +39,7 @@ public static class GltfAnimationTimelineParser
             return null;
         }
 
-        ClipTimelineMetadata? best = null;
+        var candidates = new List<ClipTimelineMetadata>();
         foreach (var animation in animations.EnumerateArray())
         {
             if (!animation.TryGetProperty("samplers", out var samplers) || samplers.ValueKind != JsonValueKind.Array)
@@ -56,14 +57,14 @@ public static class GltfAnimationTimelineParser
 
                 var accessor = accessors[inputIndex];
                 var candidate = ParseTimeAccessor(accessor);
-                if (candidate is not null && (best is null || candidate.DurationSeconds > best.DurationSeconds))
+                if (candidate is not null)
                 {
-                    best = candidate;
+                    candidates.Add(candidate);
                 }
             }
         }
 
-        return best;
+        return SelectBestTimeline(candidates);
     }
 
     private static ClipTimelineMetadata? ParseTimeAccessor(JsonElement accessor)
@@ -86,6 +87,23 @@ public static class GltfAnimationTimelineParser
             frameCount,
             (frameCount - 1) / durationSeconds,
             durationSeconds);
+    }
+
+    private static ClipTimelineMetadata? SelectBestTimeline(IReadOnlyCollection<ClipTimelineMetadata> candidates)
+    {
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        var maxDuration = candidates.Max(candidate => candidate.DurationSeconds);
+        return candidates
+            .Where(candidate => Math.Abs(candidate.DurationSeconds - maxDuration) <= DurationEpsilon)
+            .GroupBy(candidate => candidate.FrameCount)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key)
+            .Select(group => group.First())
+            .FirstOrDefault();
     }
 
     private static bool TryReadFirstNumber(JsonElement element, string propertyName, out double value)

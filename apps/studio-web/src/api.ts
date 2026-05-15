@@ -28,6 +28,19 @@ export interface ClipResponse {
   durationSeconds: number | null
   previewUrl: string | null
   includeInBuild: boolean
+  rootMotion: RootMotionDiagnosticsResponse | null
+  validation: ValidationResponse | null
+}
+
+export interface RootMotionDiagnosticsResponse {
+  sourceName: string
+  keyCount: number
+  durationSeconds: number
+  displacementX: number
+  displacementY: number
+  displacementZ: number
+  horizontalDistance: number
+  averageHorizontalSpeed: number
 }
 
 export interface ValidationResponse {

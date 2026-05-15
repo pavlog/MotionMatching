@@ -8,13 +8,14 @@ public static partial class AssimpCliInfoParser
     {
         var meshSummaries = ParseMeshSummaries(infoOutput);
         var boneCount = ParseMetric(infoOutput, "Bones");
+        var hierarchyNames = ParseHierarchyNodeNames(infoOutput);
         var materialCount = ParseMetric(infoOutput, "Materials");
         var embeddedTextureCount = ParseMetric(infoOutput, "Textures (embed.)");
 
         return new VisualSceneInspection
         {
             SkinnedMeshes = meshSummaries,
-            Skeletons = boneCount > 0 ? [new SkeletonSummary(ParseSkeletonRoot(infoOutput), boneCount)] : [],
+            Skeletons = boneCount > 0 ? [new SkeletonSummary(ParseSkeletonRoot(infoOutput), boneCount) { BoneNames = hierarchyNames }] : [],
             HasMaterials = materialCount > 0,
             HasTextures = embeddedTextureCount > 0 || HasTextureRefs(infoOutput)
         };
@@ -39,6 +40,50 @@ public static partial class AssimpCliInfoParser
         }
 
         return meshes;
+    }
+
+    public static IReadOnlyList<string> ParseHierarchyNodeNames(string infoOutput)
+    {
+        var names = new List<string>();
+        var inHierarchy = false;
+        foreach (var line in infoOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!inHierarchy)
+            {
+                inHierarchy = line.Trim().Equals("Node hierarchy:", StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            var name = CleanHierarchyNodeName(line);
+            if (!string.IsNullOrWhiteSpace(name) && !name.Equals("RootNode", StringComparison.OrdinalIgnoreCase))
+            {
+                names.Add(name);
+            }
+        }
+
+        return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string CleanHierarchyNodeName(string line)
+    {
+        var trimmed = line.Trim();
+        var markerIndex = Math.Max(trimmed.LastIndexOf('╴'), trimmed.LastIndexOf('´'));
+        if (markerIndex >= 0 && markerIndex + 1 < trimmed.Length)
+        {
+            trimmed = trimmed[(markerIndex + 1)..].Trim();
+        }
+        else
+        {
+            trimmed = Regex.Replace(trimmed, @"^[^\p{L}\p{N}_]+", string.Empty, RegexOptions.CultureInvariant).Trim();
+        }
+
+        var meshSuffixIndex = trimmed.IndexOf(" (mesh ", StringComparison.OrdinalIgnoreCase);
+        if (meshSuffixIndex >= 0)
+        {
+            trimmed = trimmed[..meshSuffixIndex].Trim();
+        }
+
+        return trimmed;
     }
 
     private static int ParseMetric(string infoOutput, string metricName)

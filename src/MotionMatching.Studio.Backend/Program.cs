@@ -21,6 +21,8 @@ builder.Services.AddSingleton<IVisualFbxInspector>(services =>
     new AssimpCliVisualFbxInspector(services.GetRequiredService<AssimpToolOptions>()));
 builder.Services.AddSingleton<IClipTimelineExtractor>(services =>
     new AssimpCliClipTimelineExtractor(services.GetRequiredService<AssimpToolOptions>()));
+builder.Services.AddSingleton<ISkeletonNameExtractor>(services =>
+    new AssimpCliSkeletonNameExtractor(services.GetRequiredService<AssimpToolOptions>()));
 builder.Services.AddSingleton(services =>
     new PreviewGlbCacheService(services.GetRequiredService<AssimpToolOptions>()));
 builder.Services.AddSingleton<BrowserWorkspaceService>();
