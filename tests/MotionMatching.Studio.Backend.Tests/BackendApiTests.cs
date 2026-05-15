@@ -185,6 +185,51 @@ public sealed class BackendApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UpdateClipSettingsPersistsRoleTagsAndBuildInclusion()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        await client.PostAsync("/api/v1/workspaces/browser", content: null);
+
+        using var characterForm = new MultipartFormDataContent();
+        characterForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("fake fbx bytes")), "visual", "IyoMixamo.fbx");
+
+        var characterResponse = await client.PostAsync("/api/v1/workspaces/browser/characters", characterForm);
+        characterResponse.EnsureSuccessStatusCode();
+        using var characterJson = JsonDocument.Parse(await characterResponse.Content.ReadAsStringAsync());
+        var characterId = characterJson.RootElement.GetProperty("id").GetString();
+
+        using var clipForm = new MultipartFormDataContent();
+        clipForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("HIERARCHY\nROOT Hips\nMOTION\nFrames: 42\nFrame Time: 0.0333333\n")), "clip", "RunForward.bvh");
+
+        var clipResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/clips", clipForm);
+        clipResponse.EnsureSuccessStatusCode();
+        using var clipJson = JsonDocument.Parse(await clipResponse.Content.ReadAsStringAsync());
+        var clipId = clipJson.RootElement.GetProperty("clips")[0].GetProperty("id").GetString();
+
+        var settingsResponse = await client.PatchAsJsonAsync(
+            $"/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/settings",
+            new
+            {
+                includeInBuild = false,
+                clipRole = "run_loop",
+                tags = new[] { "Run", "Loop", "custom tag" }
+            });
+        var settingsJson = await settingsResponse.Content.ReadAsStringAsync();
+
+        settingsResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"includeInBuild\":false", settingsJson);
+        Assert.Contains("\"clipRole\":\"run_loop\"", settingsJson);
+        Assert.Contains("\"tags\":[\"custom_tag\",\"loop\",\"run\"]", settingsJson);
+
+        var persistedClipJson = await File.ReadAllTextAsync(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "Clips", "RunForward", "clip.json"));
+        Assert.Contains("\"includeInBuild\": false", persistedClipJson);
+        Assert.Contains("\"clipRole\": \"run_loop\"", persistedClipJson);
+        Assert.Contains("\"custom_tag\"", persistedClipJson);
+        Assert.DoesNotContain(_workspaceRoot, persistedClipJson);
+    }
+
+    [Fact]
     public async Task UploadVisualFbxRejectsConfiguredSizeLimit()
     {
         await using var factory = CreateFactory(("Studio:MaxUploadBytes", "8"));

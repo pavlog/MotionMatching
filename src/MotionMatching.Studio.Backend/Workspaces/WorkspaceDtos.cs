@@ -22,12 +22,15 @@ public sealed record ClipResponse(
     string ManifestPath,
     string SourceKind,
     string SourceFileName,
+    string? ClipRole,
+    IReadOnlyList<string> Tags,
     int? FrameCount,
     double? FrameRate,
     double? DurationSeconds,
     string? PreviewUrl,
     bool IncludeInBuild,
     RootMotionDiagnosticsResponse? RootMotion,
+    FootContactDiagnosticsResponse? FootContacts,
     ValidationResponse? Validation,
     SkeletonValidationResponse? Skeleton,
     IReadOnlyList<ImportLogEntryResponse> ImportLog);
@@ -41,6 +44,22 @@ public sealed record RootMotionDiagnosticsResponse(
     double DisplacementZ,
     double HorizontalDistance,
     double AverageHorizontalSpeed);
+
+public sealed record FootContactDiagnosticsResponse(
+    double VelocityThreshold,
+    IReadOnlyList<FootContactTrackResponse> Tracks);
+
+public sealed record FootContactTrackResponse(
+    string Foot,
+    string SourceName,
+    int KeyCount,
+    IReadOnlyList<FootContactRangeResponse> Ranges);
+
+public sealed record FootContactRangeResponse(
+    int StartFrame,
+    int EndFrame,
+    double StartSeconds,
+    double EndSeconds);
 
 public sealed record ValidationResponse(
     bool CanCompile,
@@ -64,3 +83,8 @@ public sealed record SkeletonValidationResponse(
 public sealed record ImportLogEntryResponse(
     string Level,
     string Message);
+
+public sealed record ClipSettingsRequest(
+    bool IncludeInBuild,
+    string? ClipRole,
+    IReadOnlyList<string> Tags);

@@ -24,12 +24,15 @@ export interface ClipResponse {
   manifestPath: string
   sourceKind: 'fbx' | 'bvh'
   sourceFileName: string
+  clipRole: string | null
+  tags: string[]
   frameCount: number | null
   frameRate: number | null
   durationSeconds: number | null
   previewUrl: string | null
   includeInBuild: boolean
   rootMotion: RootMotionDiagnosticsResponse | null
+  footContacts: FootContactDiagnosticsResponse | null
   validation: ValidationResponse | null
   skeleton: SkeletonValidationResponse | null
   importLog: ImportLogEntryResponse[]
@@ -44,6 +47,25 @@ export interface RootMotionDiagnosticsResponse {
   displacementZ: number
   horizontalDistance: number
   averageHorizontalSpeed: number
+}
+
+export interface FootContactDiagnosticsResponse {
+  velocityThreshold: number
+  tracks: FootContactTrackResponse[]
+}
+
+export interface FootContactTrackResponse {
+  foot: 'left' | 'right'
+  sourceName: string
+  keyCount: number
+  ranges: FootContactRangeResponse[]
+}
+
+export interface FootContactRangeResponse {
+  startFrame: number
+  endFrame: number
+  startSeconds: number
+  endSeconds: number
 }
 
 export interface ValidationResponse {
@@ -71,6 +93,12 @@ export interface SkeletonValidationResponse {
 export interface ImportLogEntryResponse {
   level: 'info' | 'warning' | 'error'
   message: string
+}
+
+export interface ClipSettingsRequest {
+  includeInBuild: boolean
+  clipRole: string | null
+  tags: string[]
 }
 
 export async function openBrowserWorkspace(): Promise<WorkspaceResponse | null> {
@@ -149,6 +177,30 @@ export async function deleteClip(characterId: string, clipId: string): Promise<C
 
   if (!response.ok) {
     throw new Error(`Clip delete failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function updateClipSettings(
+  characterId: string,
+  clipId: string,
+  settings: ClipSettingsRequest,
+): Promise<CharacterResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/clips/${clipId}/settings`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(settings),
+  })
+
+  if (response.status === 404) {
+    throw new Error('Clip was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Clip settings update failed: ${response.status}`)
   }
 
   return response.json()

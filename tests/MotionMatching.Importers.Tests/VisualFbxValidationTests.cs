@@ -264,8 +264,123 @@ public class VisualFbxValidationTests
         Assert.True(diagnostics.AverageHorizontalSpeed > 270);
     }
 
+    [Fact]
+    public void GltfFootContactDiagnosticsParserReadsLowVelocityRanges()
+    {
+        var binary = new byte[sizeof(float) * 4 + sizeof(float) * 3 * 4];
+        WriteFloat(binary, 0, 0.0f);
+        WriteFloat(binary, 4, 0.1f);
+        WriteFloat(binary, 8, 0.2f);
+        WriteFloat(binary, 12, 0.3f);
+        WriteFloat(binary, 16, 0.0f);
+        WriteFloat(binary, 20, 0.0f);
+        WriteFloat(binary, 24, 0.0f);
+        WriteFloat(binary, 28, 0.005f);
+        WriteFloat(binary, 32, 0.0f);
+        WriteFloat(binary, 36, 0.0f);
+        WriteFloat(binary, 40, 0.01f);
+        WriteFloat(binary, 44, 0.0f);
+        WriteFloat(binary, 48, 0.0f);
+        WriteFloat(binary, 52, 1.0f);
+        WriteFloat(binary, 56, 0.0f);
+        WriteFloat(binary, 60, 0.0f);
+        const string gltf = """
+            {
+              "nodes": [
+                { "name": "mixamorig:LeftFoot" }
+              ],
+              "animations": [
+                {
+                  "samplers": [
+                    { "input": 0, "output": 1 }
+                  ],
+                  "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "translation" } }
+                  ]
+                }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 16 },
+                { "buffer": 0, "byteOffset": 16, "byteLength": 48 }
+              ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 4, "type": "SCALAR" },
+                { "bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3" }
+              ]
+            }
+            """;
+
+        var diagnostics = GltfFootContactDiagnosticsParser.ParseGltfJson(gltf, binary, velocityThreshold: 0.15);
+
+        Assert.NotNull(diagnostics);
+        var track = Assert.Single(diagnostics.Tracks);
+        Assert.Equal("left", track.Foot);
+        Assert.Equal("mixamorig:LeftFoot", track.SourceName);
+        var range = Assert.Single(track.Ranges);
+        Assert.Equal(0, range.StartFrame);
+        Assert.Equal(2, range.EndFrame);
+    }
+
+    [Fact]
+    public void GltfFootContactDiagnosticsParserUsesWorldSpaceParentMotion()
+    {
+        var binary = new byte[sizeof(float) * 4 + sizeof(float) * 4 * 4];
+        WriteFloat(binary, 0, 0.0f);
+        WriteFloat(binary, 4, 0.1f);
+        WriteFloat(binary, 8, 0.2f);
+        WriteFloat(binary, 12, 0.3f);
+
+        WriteQuaternionY(binary, 16, 0.0f);
+        WriteQuaternionY(binary, 32, 0.0f);
+        WriteQuaternionY(binary, 48, 0.0f);
+        WriteQuaternionY(binary, 64, MathF.PI / 2.0f);
+
+        const string gltf = """
+            {
+              "nodes": [
+                { "name": "Hips", "children": [1] },
+                { "name": "mixamorig:LeftFoot", "translation": [1, 0, 0] }
+              ],
+              "animations": [
+                {
+                  "samplers": [
+                    { "input": 0, "output": 1 }
+                  ],
+                  "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "rotation" } }
+                  ]
+                }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 16 },
+                { "buffer": 0, "byteOffset": 16, "byteLength": 64 }
+              ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 4, "type": "SCALAR" },
+                { "bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC4" }
+              ]
+            }
+            """;
+
+        var diagnostics = GltfFootContactDiagnosticsParser.ParseGltfJson(gltf, binary, velocityThreshold: 0.01);
+
+        Assert.NotNull(diagnostics);
+        var track = Assert.Single(diagnostics.Tracks);
+        var range = Assert.Single(track.Ranges);
+        Assert.Equal(0, range.StartFrame);
+        Assert.Equal(2, range.EndFrame);
+    }
+
     private static void WriteFloat(byte[] buffer, int offset, float value)
     {
         BitConverter.GetBytes(value).CopyTo(buffer, offset);
+    }
+
+    private static void WriteQuaternionY(byte[] buffer, int offset, float radians)
+    {
+        WriteFloat(buffer, offset, 0.0f);
+        WriteFloat(buffer, offset + 4, MathF.Sin(radians / 2.0f));
+        WriteFloat(buffer, offset + 8, 0.0f);
+        WriteFloat(buffer, offset + 12, MathF.Cos(radians / 2.0f));
     }
 }

@@ -15,10 +15,12 @@ import {
   Quaternion,
   Scene,
   SceneLoader,
+  StandardMaterial,
   TransformNode,
   Vector3,
 } from '@babylonjs/core'
 import '@babylonjs/loaders/glTF'
+import type { FootContactDiagnosticsResponse } from './api'
 
 interface BabylonViewportProps {
   previewUrl: string | null
@@ -26,6 +28,8 @@ interface BabylonViewportProps {
   clipFrame: number | null
   clipFrameCount: number | null
   clipFrameRate: number | null
+  clipDurationSeconds: number | null
+  footContacts: FootContactDiagnosticsResponse | null
   clipMotionMode: ClipMotionMode
   label: string
   onClipMotionModeChange?: (mode: ClipMotionMode) => void
@@ -34,6 +38,7 @@ interface BabylonViewportProps {
 
 type CameraView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso'
 type AxisName = 'x' | 'negX' | 'y' | 'negY' | 'z' | 'negZ'
+type FootName = 'left' | 'right'
 type ClipMotionMode = 'inPlace' | 'rootMotion'
 type PoseTarget = Bone | TransformNode
 type PoseSnapshot = {
@@ -60,6 +65,8 @@ export function BabylonViewport({
   clipFrame,
   clipFrameCount,
   clipFrameRate,
+  clipDurationSeconds,
+  footContacts,
   clipMotionMode,
   label,
   onClipMotionModeChange,
@@ -72,8 +79,10 @@ export function BabylonViewport({
   const importedMeshesRef = useRef<Mesh[]>([])
   const clipSourceNodesRef = useRef<TransformNode[]>([])
   const clipAnimationRef = useRef<AnimationGroup | null>(null)
+  const footContactsRef = useRef<FootContactDiagnosticsResponse | null>(null)
+  const contactMarkersRef = useRef<Partial<Record<FootName, Mesh>>>({})
   const characterPoseRef = useRef(new Map<PoseTarget, PoseSnapshot>())
-  const clipScrubRef = useRef({ frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate })
+  const clipScrubRef = useRef({ frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate, durationSeconds: clipDurationSeconds })
   const [cameraMode, setCameraMode] = useState<'perspective' | 'orthographic'>('perspective')
   const [status, setStatus] = useState<ViewportStatus>({ kind: 'empty', message: 'Empty scene' })
   const [animationState, setAnimationState] = useState('none')
@@ -81,8 +90,12 @@ export function BabylonViewport({
   const statusText = status.kind === 'ready' ? label : status.message
 
   useEffect(() => {
-    clipScrubRef.current = { frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate }
-  }, [clipFrame, clipFrameCount, clipFrameRate])
+    clipScrubRef.current = { frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate, durationSeconds: clipDurationSeconds }
+  }, [clipFrame, clipFrameCount, clipFrameRate, clipDurationSeconds])
+
+  useEffect(() => {
+    footContactsRef.current = footContacts
+  }, [footContacts])
 
   useEffect(() => {
     onAnimationStateChange?.(animationState)
@@ -311,6 +324,7 @@ export function BabylonViewport({
     engine.runRenderLoop(() => {
       updateOrthographicBounds()
       updateNavigationWidget()
+      updateContactMarkers(scene, clipScrubRef.current, footContactsRef.current, contactMarkersRef.current)
       scene.render()
     })
 
@@ -324,6 +338,10 @@ export function BabylonViewport({
         node.dispose(false, true)
       }
       clipSourceNodesRef.current = []
+      for (const marker of Object.values(contactMarkersRef.current)) {
+        marker?.dispose(false, true)
+      }
+      contactMarkersRef.current = {}
       scene.dispose()
       engine.dispose()
       sceneRef.current = null
@@ -552,6 +570,139 @@ export function BabylonViewport({
       </div>
     </section>
   )
+}
+
+function updateContactMarkers(
+  scene: Scene,
+  scrub: { frame: number | null; frameCount: number | null; frameRate: number | null; durationSeconds: number | null },
+  footContacts: FootContactDiagnosticsResponse | null,
+  markers: Partial<Record<FootName, Mesh>>,
+) {
+  if (!footContacts || scrub.frame === null || !scrub.frameRate || scrub.frameRate <= 0) {
+    hideContactMarkers(markers)
+    return
+  }
+
+  const maxFrame = Math.max((scrub.frameCount ?? 1) - 1, 0)
+  const durationSeconds = scrub.durationSeconds && scrub.durationSeconds > 0
+    ? scrub.durationSeconds
+    : (scrub.frameCount ?? 0) / scrub.frameRate
+  const currentSeconds = maxFrame > 0
+    ? Math.min(Math.max(scrub.frame / maxFrame, 0), 1) * durationSeconds
+    : 0
+  const halfFrameSeconds = maxFrame > 0
+    ? durationSeconds / maxFrame * 0.5
+    : 0.5 / scrub.frameRate
+  for (const foot of ['left', 'right'] as FootName[]) {
+    const activeTrack = footContacts.tracks.find((track) =>
+      track.foot === foot &&
+      track.ranges.some((range) =>
+        currentSeconds >= range.startSeconds - halfFrameSeconds &&
+        currentSeconds <= range.endSeconds + halfFrameSeconds,
+      ),
+    )
+    const marker = ensureContactMarker(scene, foot, markers)
+    if (!activeTrack) {
+      marker.setEnabled(false)
+      continue
+    }
+
+    const position = findFootWorldPosition(scene, activeTrack.sourceName, foot)
+    if (!position) {
+      marker.setEnabled(false)
+      continue
+    }
+
+    marker.position.copyFrom(position)
+    marker.position.y += 5
+    marker.setEnabled(true)
+  }
+}
+
+function hideContactMarkers(markers: Partial<Record<FootName, Mesh>>) {
+  for (const marker of Object.values(markers)) {
+    marker?.setEnabled(false)
+  }
+}
+
+function ensureContactMarker(scene: Scene, foot: FootName, markers: Partial<Record<FootName, Mesh>>) {
+  const existing = markers[foot]
+  if (existing && !existing.isDisposed()) {
+    return existing
+  }
+
+  const color = foot === 'left'
+    ? new Color3(0.2, 0.58, 1)
+    : new Color3(1, 0.66, 0.18)
+  const marker = MeshBuilder.CreateSphere(`foot-contact-${foot}`, {
+    diameter: 8,
+    segments: 24,
+  }, scene)
+  marker.isPickable = false
+  marker.renderingGroupId = 2
+
+  const material = new StandardMaterial(`foot-contact-${foot}-material`, scene)
+  material.diffuseColor = color
+  material.emissiveColor = color.scale(0.8)
+  material.alpha = 0.86
+  material.disableDepthWrite = true
+  marker.material = material
+  marker.setEnabled(false)
+  markers[foot] = marker
+  return marker
+}
+
+function findFootWorldPosition(scene: Scene, sourceName: string, foot: FootName) {
+  const normalizedSource = normalizeContactTargetName(sourceName)
+  for (const node of scene.transformNodes) {
+    if (normalizeContactTargetName(node.name) === normalizedSource || normalizeContactTargetName(node.id) === normalizedSource) {
+      return node.getAbsolutePosition().clone()
+    }
+  }
+
+  for (const skeleton of scene.skeletons) {
+    for (const bone of skeleton.bones) {
+      if (normalizeContactTargetName(bone.name) === normalizedSource || normalizeContactTargetName(bone.id) === normalizedSource) {
+        return getBoneWorldPosition(scene, bone)
+      }
+    }
+  }
+
+  const candidates = foot === 'left'
+    ? ['lefttoe', 'lefttoes', 'leftfoot', 'ltoe', 'lfoot']
+    : ['righttoe', 'righttoes', 'rightfoot', 'rtoe', 'rfoot']
+  for (const skeleton of scene.skeletons) {
+    for (const bone of skeleton.bones) {
+      const normalizedBone = normalizeContactTargetName(bone.name || bone.id)
+      if (candidates.some((candidate) => normalizedBone.includes(candidate))) {
+        return getBoneWorldPosition(scene, bone)
+      }
+    }
+  }
+
+  for (const node of scene.transformNodes) {
+    const normalizedNode = normalizeContactTargetName(node.name || node.id)
+    if (candidates.some((candidate) => normalizedNode.includes(candidate))) {
+      return node.getAbsolutePosition().clone()
+    }
+  }
+
+  return null
+}
+
+function getBoneWorldPosition(scene: Scene, bone: Bone) {
+  const linkedNode = bone.getTransformNode()
+  if (linkedNode) {
+    return linkedNode.getAbsolutePosition().clone()
+  }
+
+  const skeleton = bone.getSkeleton()
+  const skinnedMesh = scene.meshes.find((mesh) => mesh.skeleton === skeleton) ?? null
+  return bone.getAbsolutePosition(skinnedMesh).clone()
+}
+
+function normalizeContactTargetName(name: string | undefined) {
+  return normalizeTargetName(name).replace(/[\s_.-]/g, '')
 }
 
 function buildAnimationTargetMap(scene: Scene) {

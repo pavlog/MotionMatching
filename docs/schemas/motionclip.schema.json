@@ -68,6 +68,29 @@
     "includeInBuild": {
       "type": "boolean"
     },
+    "clipRole": {
+      "type": "string",
+      "enum": [
+        "idle_loop",
+        "walk_loop",
+        "run_loop",
+        "walk_start",
+        "run_start",
+        "walk_stop",
+        "run_stop",
+        "turn_180",
+        "run_turn_180",
+        "jump_up",
+        "jump_forward_standing",
+        "jump_forward_run",
+        "jump_turn",
+        "fall_loop",
+        "land_soft",
+        "land_run",
+        "land_medium",
+        "land_hard"
+      ]
+    },
     "tags": {
       "type": "array",
       "items": {

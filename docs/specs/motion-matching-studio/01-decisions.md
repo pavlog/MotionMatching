@@ -100,6 +100,7 @@ This document records accepted design decisions so future sessions can continue 
 - Clip rows show validation badges/finding counts.
 - Clip include/exclude from build should be accessible from the inspector and context menu; a compact row control can also be used if it does not clutter the tree.
 - Clip rows expose a context menu for destructive clip actions. MVP deletion removes the clip from the character manifest and deletes the managed clip folder/cache from the browser workspace after confirmation.
+- Clip settings are editable from the right inspector in MVP: include/exclude from build, one controlled `clipRole`, default global tags, and custom tags. These settings are persisted to the clip manifest through a dedicated backend settings endpoint.
 - Center: 3D viewport.
 - Right panel: universal context-sensitive object inspector.
 - Bottom area: timeline and logs/validation visible together in MVP.
@@ -581,6 +582,10 @@ Clips without `clipRole` may still be included as generic search data with warni
 - Foot contacts are initially detected by toes/foot velocity threshold with smoothing, matching the original engine spirit.
 - Height-based refinement is planned later.
 - Contact velocity threshold is a character-level setting with default `0.15`.
+- Browser MVP foot-contact preview is read-only diagnostics derived from the clip preview GLB. It reconstructs foot/toe world-space motion from the glTF node hierarchy plus animated translation/rotation/scale channels, exposes the source node names in the inspector, and draws left/right contact bars on the timeline. Until asset unit normalization lands, the browser GLB diagnostics use a source-unit velocity threshold (`15 u/s`) rather than the future character-level normalized default; if that fixed threshold finds nothing, the preview falls back to a low-percentile velocity cutoff for that foot/toe track so the user still gets useful visual hints. This is preview/debug data only and must not rewrite clip source files or manifests.
+- Foot-contact API responses expose range seconds from the source GLB and range frames normalized back onto the clip timeline. Do not show raw foot-track sample indices as clip frames, because foot/toe channels can have different key counts and sampling than the main clip timeline.
+- The viewport also shows active foot contacts in 3D as transient colored markers near the matched foot/toe target: left is blue and right is amber. These markers are a preview overlay driven by the current timeline time and the read-only diagnostics, not authored clip data. Do not apply an extra visual frame bias after normalizing contact ranges onto the clip timeline; previous `+1` preview bias made contact starts appear one frame late.
+- Foot contact diagnostics must discard a single contact range that covers almost the whole clip. This usually means the detector has too little useful planted-foot motion signal for the current clip/scale settings, and showing it would mislead the user.
 - Clips can override contact detection settings.
 - Per-clip contact detection mode is editable through a combobox.
 - Initial contact detection modes:
@@ -594,6 +599,7 @@ Clips without `clipRole` may still be included as generic search data with warni
 
 - Timeline shows frames and seconds.
 - Timeline stores the current frame as a zero-based frame index internally, clamps it to `0..frameCount-1`, and displays it to users as `Frame 1/<frameCount>` through `Frame <frameCount>/<frameCount>`.
+- Timeline ruler should be visually frame-based, not only time-based: show per-frame ticks when practical, major frame labels, and a frame number on the playhead. Contact bars should draw from normalized `startFrame..endFrame` on the clip timeline so frame ranges are readable even when source GLB channel seconds are fractional inside a frame.
 - Timeline scrubber supports mouse/pointer drag with pointer capture, not only click-to-seek, so users can continuously scrub animation frames in the viewport.
 - Timeline playback is driven by wall-clock elapsed time through `requestAnimationFrame`, but discrete preview frame selection follows the clip frame-rate cadence: frame `n` is held for `1 / frameRate` seconds and the loop length is `frameCount / frameRate`. Source duration metadata still describes the animation time range between first and last keys, but it should not make the final displayed frame vanish during looped editor preview.
 - Timeline loop range is editor-only preview state. It is represented by zero-based start/end frames internally, displayed as one-based `In`/`Out` values, and affects playback looping only; it must not rewrite clip manifests or source animation data.

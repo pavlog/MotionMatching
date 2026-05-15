@@ -144,6 +144,28 @@ app.MapDelete("/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId
     }
 });
 
+app.MapPatch("/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/settings", async (
+    string characterId,
+    string clipId,
+    ClipSettingsRequest request,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.UpdateClipSettingsAsync(characterId, clipId, request, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { error = "invalid_clip_settings", message = exception.Message });
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "clip_not_found", message = exception.Message });
+    }
+});
+
 app.MapGet("/api/v1/workspaces/browser/assets/{**assetPath}", (
     string assetPath,
     IOptions<StudioBackendOptions> options) =>

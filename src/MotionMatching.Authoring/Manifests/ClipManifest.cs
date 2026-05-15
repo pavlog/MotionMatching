@@ -31,6 +31,8 @@ public sealed record ClipManifest
 
     public bool IncludeInBuild { get; init; } = true;
 
+    public string? ClipRole { get; init; }
+
     public List<string> Tags { get; init; } = [];
 
     public static ClipManifest FromUploadedSource(
