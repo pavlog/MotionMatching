@@ -396,6 +396,7 @@
 .timeline-contact-range {
   position: absolute;
   z-index: 2;
+  min-width: 4px;
   height: 4px;
   border-radius: 2px;
   pointer-events: none;

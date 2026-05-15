@@ -590,6 +590,7 @@ function updateContactMarkers(
   const currentSeconds = maxFrame > 0
     ? Math.min(Math.max(scrub.frame / maxFrame, 0), 1) * durationSeconds
     : 0
+  const currentFrame = Math.round(Math.min(Math.max(scrub.frame, 0), maxFrame))
   const halfFrameSeconds = maxFrame > 0
     ? durationSeconds / maxFrame * 0.5
     : 0.5 / scrub.frameRate
@@ -597,8 +598,10 @@ function updateContactMarkers(
     const activeTrack = footContacts.tracks.find((track) =>
       track.foot === foot &&
       track.ranges.some((range) =>
-        currentSeconds >= range.startSeconds - halfFrameSeconds &&
-        currentSeconds <= range.endSeconds + halfFrameSeconds,
+        (currentFrame >= range.startFrame && currentFrame <= range.endFrame) ||
+        (maxFrame > 0 && range.startFrame === 0 && currentFrame === maxFrame) ||
+        (currentSeconds >= range.startSeconds - halfFrameSeconds &&
+          currentSeconds <= range.endSeconds + halfFrameSeconds),
       ),
     )
     const marker = ensureContactMarker(scene, foot, markers)

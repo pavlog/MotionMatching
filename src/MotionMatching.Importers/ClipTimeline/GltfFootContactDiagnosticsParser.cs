@@ -392,6 +392,22 @@ public static class GltfFootContactDiagnosticsParser
             }
         }
 
+        var hasLoopBoundaryContact = false;
+        var loopFrameStep = EstimateTypicalFrameStep(times);
+        if (loopFrameStep > 0)
+        {
+            var dx = positions[0].X - positions[^1].X;
+            var dy = positions[0].Y - positions[^1].Y;
+            var dz = positions[0].Z - positions[^1].Z;
+            var loopSpeed = Math.Sqrt(dx * dx + dy * dy + dz * dz) / loopFrameStep;
+            if (loopSpeed <= velocityThreshold)
+            {
+                contactFrames[^1] = true;
+                contactFrames[0] = true;
+                hasLoopBoundaryContact = true;
+            }
+        }
+
         var ranges = new List<FootContactRange>();
         var start = -1;
         for (var index = 0; index < contactFrames.Length; index++)
@@ -408,7 +424,8 @@ public static class GltfFootContactDiagnosticsParser
             }
 
             var end = contactFrames[index] ? index : index - 1;
-            if (end - start >= 1)
+            var isLoopBoundarySingleFrame = hasLoopBoundaryContact && start == end && (start == 0 || start == contactFrames.Length - 1);
+            if (end - start >= 1 || isLoopBoundarySingleFrame)
             {
                 ranges.Add(new FootContactRange(start, end, times[start], times[end]));
             }
@@ -417,6 +434,27 @@ public static class GltfFootContactDiagnosticsParser
         }
 
         return ranges;
+    }
+
+    private static double EstimateTypicalFrameStep(IReadOnlyList<double> times)
+    {
+        var deltas = new List<double>();
+        for (var index = 1; index < times.Count; index++)
+        {
+            var delta = times[index] - times[index - 1];
+            if (delta > 0)
+            {
+                deltas.Add(delta);
+            }
+        }
+
+        if (deltas.Count == 0)
+        {
+            return 0;
+        }
+
+        deltas.Sort();
+        return deltas[deltas.Count / 2];
     }
 
     private static List<double> TryReadFloatAccessor(JsonElement accessor, JsonElement bufferViews, byte[] binary)

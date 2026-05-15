@@ -644,12 +644,25 @@ function TimelinePanel({
       left: `${maxFrame > 0 ? (index / maxFrame) * 100 : 0}%`,
     }))
   const contactRanges = footContacts?.tracks.flatMap((track) =>
-    track.ranges.map((range) => ({
-      key: `${track.foot}-${range.startFrame}-${range.endFrame}`,
-      foot: track.foot,
-      left: `${maxFrame > 0 ? (Math.min(Math.max(range.startFrame, 0), maxFrame) / maxFrame) * 100 : 0}%`,
-      right: `calc(100% - ${maxFrame > 0 ? (Math.min(Math.max(range.endFrame, 0), maxFrame) / maxFrame) * 100 : 0}%)`,
-    })),
+    track.ranges.flatMap((range) => {
+      const ranges = [{
+        key: `${track.foot}-${range.startFrame}-${range.endFrame}`,
+        foot: track.foot,
+        left: `${maxFrame > 0 ? (Math.min(Math.max(range.startFrame, 0), maxFrame) / maxFrame) * 100 : 0}%`,
+        right: `calc(100% - ${maxFrame > 0 ? (Math.min(Math.max(range.endFrame, 0), maxFrame) / maxFrame) * 100 : 0}%)`,
+      }]
+
+      if (maxFrame > 0 && range.startFrame === 0) {
+        ranges.push({
+          key: `${track.foot}-${range.startFrame}-${range.endFrame}-loop-end`,
+          foot: track.foot,
+          left: '100%',
+          right: '0%',
+        })
+      }
+
+      return ranges
+    }),
   ) ?? []
 
   const seekFromClientX = (clientX: number) => {

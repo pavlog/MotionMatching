@@ -371,6 +371,71 @@ public class VisualFbxValidationTests
         Assert.Equal(2, range.EndFrame);
     }
 
+    [Fact]
+    public void GltfFootContactDiagnosticsParserKeepsLoopBoundaryContactFrames()
+    {
+        var binary = new byte[sizeof(float) * 4 + sizeof(float) * 3 * 4];
+        WriteFloat(binary, 0, 0.0f);
+        WriteFloat(binary, 4, 0.1f);
+        WriteFloat(binary, 8, 0.2f);
+        WriteFloat(binary, 12, 0.3f);
+        WriteFloat(binary, 16, 0.0f);
+        WriteFloat(binary, 20, 0.0f);
+        WriteFloat(binary, 24, 0.0f);
+        WriteFloat(binary, 28, 10.0f);
+        WriteFloat(binary, 32, 0.0f);
+        WriteFloat(binary, 36, 0.0f);
+        WriteFloat(binary, 40, 20.0f);
+        WriteFloat(binary, 44, 0.0f);
+        WriteFloat(binary, 48, 0.0f);
+        WriteFloat(binary, 52, 0.0f);
+        WriteFloat(binary, 56, 0.0f);
+        WriteFloat(binary, 60, 0.0f);
+        const string gltf = """
+            {
+              "nodes": [
+                { "name": "mixamorig:RightFoot" }
+              ],
+              "animations": [
+                {
+                  "samplers": [
+                    { "input": 0, "output": 1 }
+                  ],
+                  "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "translation" } }
+                  ]
+                }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 16 },
+                { "buffer": 0, "byteOffset": 16, "byteLength": 48 }
+              ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 4, "type": "SCALAR" },
+                { "bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3" }
+              ]
+            }
+            """;
+
+        var diagnostics = GltfFootContactDiagnosticsParser.ParseGltfJson(gltf, binary, velocityThreshold: 0.15);
+
+        Assert.NotNull(diagnostics);
+        var track = Assert.Single(diagnostics.Tracks);
+        Assert.Equal("right", track.Foot);
+        Assert.Collection(
+            track.Ranges,
+            range =>
+            {
+                Assert.Equal(0, range.StartFrame);
+                Assert.Equal(0, range.EndFrame);
+            },
+            range =>
+            {
+                Assert.Equal(3, range.StartFrame);
+                Assert.Equal(3, range.EndFrame);
+            });
+    }
+
     private static void WriteFloat(byte[] buffer, int offset, float value)
     {
         BitConverter.GetBytes(value).CopyTo(buffer, offset);
