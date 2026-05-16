@@ -12,6 +12,7 @@ import {
   HemisphericLight,
   Mesh,
   MeshBuilder,
+  PointerEventTypes,
   Quaternion,
   Scene,
   SceneLoader,
@@ -36,6 +37,7 @@ interface BabylonViewportProps {
   label: string
   onClipMotionModeChange?: (mode: ClipMotionMode) => void
   onAnimationStateChange?: (state: string) => void
+  onSamplingQueryChange?: (query: SamplingQueryResponse) => void
 }
 
 type CameraView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso'
@@ -54,6 +56,10 @@ type ViewportStatus =
   | { kind: 'loading'; message: string }
   | { kind: 'ready' }
   | { kind: 'error'; message: string }
+type SamplingDragState = {
+  index: number
+  marker: Mesh
+}
 
 const isoViewDirection = new Vector3(-1, 0.8, -1).normalize()
 
@@ -75,6 +81,7 @@ export function BabylonViewport({
   label,
   onClipMotionModeChange,
   onAnimationStateChange,
+  onSamplingQueryChange,
 }: BabylonViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const sceneRef = useRef<Scene | null>(null)
@@ -87,6 +94,10 @@ export function BabylonViewport({
   const showFootContactsRef = useRef(true)
   const contactMarkersRef = useRef<Partial<Record<FootName, Mesh>>>({})
   const samplingPreviewMeshesRef = useRef<Mesh[]>([])
+  const samplingPreviewRef = useRef(samplingPreview)
+  const samplingQueryRef = useRef<SamplingQueryResponse | null>(samplingQuery)
+  const samplingDragRef = useRef<SamplingDragState | null>(null)
+  const onSamplingQueryChangeRef = useRef<typeof onSamplingQueryChange>(onSamplingQueryChange)
   const characterPoseRef = useRef(new Map<PoseTarget, PoseSnapshot>())
   const clipScrubRef = useRef({ frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate, durationSeconds: clipDurationSeconds })
   const [cameraMode, setCameraMode] = useState<'perspective' | 'orthographic'>('perspective')
@@ -114,6 +125,12 @@ export function BabylonViewport({
   useEffect(() => {
     onAnimationStateChange?.(animationState)
   }, [animationState, onAnimationStateChange])
+
+  useEffect(() => {
+    samplingPreviewRef.current = samplingPreview
+    samplingQueryRef.current = samplingQuery
+    onSamplingQueryChangeRef.current = onSamplingQueryChange
+  }, [onSamplingQueryChange, samplingPreview, samplingQuery])
 
   const applyClipFrame = useCallback((animationGroup: AnimationGroup) => {
     const { frame, frameCount, frameRate } = clipScrubRef.current
@@ -332,6 +349,66 @@ export function BabylonViewport({
         event.preventDefault()
       }
     }
+    const pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
+      if (!samplingPreviewRef.current || !samplingQueryRef.current) {
+        return
+      }
+
+      if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+        const pickedMesh = pointerInfo.pickInfo?.pickedMesh
+        const trajectoryIndex = typeof pickedMesh?.metadata?.samplingTrajectoryIndex === 'number'
+          ? pickedMesh.metadata.samplingTrajectoryIndex as number
+          : null
+        if (trajectoryIndex === null || !(pickedMesh instanceof Mesh)) {
+          return
+        }
+
+        samplingDragRef.current = { index: trajectoryIndex, marker: pickedMesh }
+        camera.detachControl()
+        pointerInfo.event.preventDefault()
+        return
+      }
+
+      if (pointerInfo.type === PointerEventTypes.POINTERMOVE && samplingDragRef.current) {
+        const point = pickSamplingDragPoint(scene)
+        if (!point) {
+          return
+        }
+
+        samplingDragRef.current.marker.position.x = point.x
+        samplingDragRef.current.marker.position.z = point.z
+        pointerInfo.event.preventDefault()
+        return
+      }
+
+      if (pointerInfo.type === PointerEventTypes.POINTERUP && samplingDragRef.current) {
+        const drag = samplingDragRef.current
+        samplingDragRef.current = null
+        camera.attachControl(canvas, true)
+        const currentQuery = samplingQueryRef.current
+        if (!currentQuery) {
+          return
+        }
+
+        const nextTrajectory = currentQuery.trajectory.map((point, index) =>
+          index === drag.index
+            ? {
+                ...point,
+                position: [
+                  Number(drag.marker.position.x.toFixed(2)),
+                  0,
+                  Number(drag.marker.position.z.toFixed(2)),
+                ],
+              }
+            : point,
+        )
+        onSamplingQueryChangeRef.current?.({
+          ...currentQuery,
+          trajectory: nextTrajectory,
+        })
+        pointerInfo.event.preventDefault()
+      }
+    })
 
     window.addEventListener('resize', handleResize)
     window.addEventListener('keydown', handleKeyDown)
@@ -345,6 +422,7 @@ export function BabylonViewport({
     return () => {
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', handleKeyDown)
+      scene.onPointerObservable.remove(pointerObserver)
       importedMeshesRef.current = []
       clipAnimationRef.current?.dispose()
       clipAnimationRef.current = null
@@ -688,7 +766,8 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
     }, scene)
     marker.position = point
     marker.material = trajectoryMaterial
-    marker.isPickable = false
+    marker.isPickable = true
+    marker.metadata = { samplingTrajectoryIndex: index }
     meshes.push(marker)
   }
 
@@ -699,7 +778,25 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
   trajectoryLine.isPickable = false
   meshes.push(trajectoryLine)
 
+  const dragPlane = MeshBuilder.CreateGround('sampling-drag-plane', {
+    width: 10000,
+    height: 10000,
+  }, scene)
+  dragPlane.position.y = 2
+  dragPlane.isPickable = true
+  const dragPlaneMaterial = new StandardMaterial('sampling-drag-plane-material', scene)
+  dragPlaneMaterial.alpha = 0.001
+  dragPlaneMaterial.disableDepthWrite = true
+  dragPlane.material = dragPlaneMaterial
+  dragPlane.metadata = { samplingDragPlane: true }
+  meshes.push(dragPlane)
+
   return meshes
+}
+
+function pickSamplingDragPoint(scene: Scene) {
+  const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => Boolean(mesh.metadata?.samplingDragPlane))
+  return pick?.hit && pick.pickedPoint ? pick.pickedPoint : null
 }
 
 function vectorFromSamplingArray(values: number[] | undefined, fallback: Vector3) {

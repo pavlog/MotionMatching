@@ -1005,14 +1005,46 @@
   gap: 6px;
 }
 
+.sampling-trajectory-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-0);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .sampling-trajectory-row {
   display: grid;
-  grid-template-columns: 0.8fr 1fr 1fr;
+  grid-template-columns: 0.8fr 1fr 1fr auto;
   gap: 6px;
+  align-items: end;
   padding: 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface-2);
+}
+
+.mini-action {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mini-action.danger {
+  color: #ffb0b0;
+}
+
+.mini-action:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .inspector-section h2,

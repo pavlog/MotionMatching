@@ -1100,6 +1100,13 @@ function App() {
           label={selectedClip ? `${selectedCharacter?.name ?? 'Character'} / ${selectedClip.name}` : selectedCharacter?.name ?? 'Empty scene'}
           onClipMotionModeChange={setClipMotionMode}
           onAnimationStateChange={setAnimationPreviewState}
+          onSamplingQueryChange={(query) => selectedCharacter && handleUpdateSampling(selectedCharacter.id, query.id, {
+            name: query.name,
+            capsule: query.capsule,
+            facing: query.facing,
+            velocity: query.velocity,
+            trajectory: query.trajectory,
+          })}
         />
       </section>
 
@@ -2573,6 +2580,13 @@ function updateVectorValue(values: number[], index: number, value: number) {
   return next
 }
 
+function vectorToYawDegrees(values: number[]) {
+  const x = values[0] ?? 0
+  const z = values[2] ?? 1
+  const degrees = Math.atan2(x, z) * 180 / Math.PI
+  return Number.isFinite(degrees) ? degrees : 0
+}
+
 function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
   const contract = {
     characterName: draft.characterName,
@@ -3072,6 +3086,7 @@ function SamplingInspector({
     ? `${formatRuntimeScaleMode(runtimeDraft.features.scale.mode)} x${formatNumber(runtimeDraft.features.scale.normalizationFactor)}`
     : 'Not generated'
   const hasChanges = Boolean(sampling && draft && JSON.stringify(sampling) !== JSON.stringify(draft))
+  const facingAngle = draft ? vectorToYawDegrees(draft.facing) : 0
 
   function updateCapsule(field: keyof SamplingQueryResponse['capsule'], value: number) {
     setDraft((current) => current
@@ -3090,6 +3105,16 @@ function SamplingInspector({
       ? {
           ...current,
           [field]: updateVectorValue(current[field], index, value),
+        }
+      : current)
+  }
+
+  function updateFacingAngle(degrees: number) {
+    const radians = degrees * Math.PI / 180
+    setDraft((current) => current
+      ? {
+          ...current,
+          facing: [Number(Math.sin(radians).toFixed(3)), 0, Number(Math.cos(radians).toFixed(3))],
         }
       : current)
   }
@@ -3130,6 +3155,45 @@ function SamplingInspector({
     })
   }
 
+  function addTrajectoryPoint() {
+    setDraft((current) => {
+      if (!current) {
+        return current
+      }
+
+      const lastPoint = current.trajectory.at(-1)
+      const nextFrame = (lastPoint?.frameOffset ?? 0) + 20
+      const nextPosition = lastPoint
+        ? [
+            (lastPoint.position[0] ?? 0) + (current.velocity[0] ?? 0) * 20,
+            0,
+            (lastPoint.position[2] ?? 0) + Math.max((current.velocity[2] ?? 1) * 20, 20),
+          ]
+        : [0, 0, 20]
+
+      return {
+        ...current,
+        trajectory: [
+          ...current.trajectory,
+          {
+            frameOffset: nextFrame,
+            position: nextPosition,
+            direction: current.facing,
+          },
+        ],
+      }
+    })
+  }
+
+  function deleteTrajectoryPoint(index: number) {
+    setDraft((current) => current
+      ? {
+          ...current,
+          trajectory: current.trajectory.filter((_, pointIndex) => pointIndex !== index),
+        }
+      : current)
+  }
+
   return (
     <>
       <dl>
@@ -3158,12 +3222,8 @@ function SamplingInspector({
               <input type="number" min={1} value={draft.capsule.radius} onChange={(event) => updateCapsule('radius', Number(event.target.value) || 1)} />
             </label>
             <label className="setting-field">
-              Facing X
-              <input type="number" step={0.1} value={draft.facing[0] ?? 0} onChange={(event) => updateVector('facing', 0, Number(event.target.value) || 0)} />
-            </label>
-            <label className="setting-field">
-              Facing Z
-              <input type="number" step={0.1} value={draft.facing[2] ?? 0} onChange={(event) => updateVector('facing', 2, Number(event.target.value) || 0)} />
+              Facing angle
+              <input type="number" step={1} value={Math.round(facingAngle)} onChange={(event) => updateFacingAngle(Number(event.target.value) || 0)} />
             </label>
             <label className="setting-field">
               Velocity X
@@ -3173,6 +3233,10 @@ function SamplingInspector({
               Velocity Z
               <input type="number" step={0.1} value={draft.velocity[2] ?? 0} onChange={(event) => updateVector('velocity', 2, Number(event.target.value) || 0)} />
             </label>
+          </div>
+          <div className="sampling-trajectory-header">
+            <span>Trajectory</span>
+            <button type="button" className="mini-action" onClick={addTrajectoryPoint}>+ point</button>
           </div>
           <div className="sampling-trajectory-list">
             {draft.trajectory.map((point, index) => (
@@ -3189,6 +3253,14 @@ function SamplingInspector({
                   Z
                   <input type="number" step={1} value={point.position[2] ?? 0} onChange={(event) => updateTrajectory(index, 'positionZ', Number(event.target.value) || 0)} />
                 </label>
+                <button
+                  type="button"
+                  className="mini-action danger"
+                  disabled={draft.trajectory.length <= 1}
+                  onClick={() => deleteTrajectoryPoint(index)}
+                >
+                  Delete
+                </button>
               </div>
             ))}
           </div>
