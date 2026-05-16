@@ -186,6 +186,7 @@ public sealed record RuntimePoseDraftResponse(
     int ClipCount,
     int PlannedPoseSampleCount,
     IReadOnlyList<RuntimePoseClipDraftResponse> Clips,
+    IReadOnlyList<RuntimePoseSampleResponse> Samples,
     IReadOnlyList<BuildReadinessFindingResponse> Findings);
 
 public sealed record RuntimePoseClipDraftResponse(
@@ -198,6 +199,20 @@ public sealed record RuntimePoseClipDraftResponse(
     double? DurationSeconds,
     int PlannedSampleCount,
     IReadOnlyList<int> SampleFramesPreview);
+
+public sealed record RuntimePoseSampleResponse(
+    string ClipId,
+    string ClipName,
+    bool IsMirrored,
+    int Frame,
+    double Seconds,
+    IReadOnlyList<RuntimePoseBoneSampleResponse> Bones);
+
+public sealed record RuntimePoseBoneSampleResponse(
+    string BoneName,
+    double[] Translation,
+    double[] Rotation,
+    double[] Scale);
 
 public sealed record RuntimeFeatureDraftResponse(
     string Status,
@@ -240,6 +255,7 @@ public sealed record RuntimeFeatureSamplePreviewResponse(
 public sealed record RuntimeDatabaseDraftResponse(
     string Status,
     string SchemaVersion,
+    RuntimeDatabaseSchemaResponse Schema,
     int ClipCount,
     int SampleCount,
     int FeatureCount,
@@ -248,6 +264,12 @@ public sealed record RuntimeDatabaseDraftResponse(
     IReadOnlyList<RuntimeDatabaseSampleResponse> Samples,
     IReadOnlyList<RuntimeDatabaseSamplePreviewResponse> SamplePreviews,
     IReadOnlyList<BuildReadinessFindingResponse> Findings);
+
+public sealed record RuntimeDatabaseSchemaResponse(
+    string Id,
+    int Version,
+    string Format,
+    string Units);
 
 public sealed record RuntimeDatabaseClipResponse(
     string ClipId,

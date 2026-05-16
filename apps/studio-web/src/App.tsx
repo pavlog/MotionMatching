@@ -635,7 +635,7 @@ function App() {
   async function handleGenerateRuntimeBuildDraft(character: CharacterResponse) {
     const { sampleFrameStep, scaleMode } = character.runtimeBuildSettings
     setIsBusy(true)
-    appendLog(`Generating runtime build draft for ${character.name} at step ${sampleFrameStep}, scale ${scaleMode}`)
+    appendLog(`Building runtime draft for ${character.name} at step ${sampleFrameStep}, scale ${scaleMode}`)
     try {
       const draft = await generateRuntimeBuildDraft(character.id, sampleFrameStep, scaleMode)
       setLastRuntimeDraft(draft)
@@ -663,7 +663,7 @@ function App() {
             ),
           }
         : currentWorkspace)
-      appendLog(`Runtime build draft generated: ${draft.draftPath}`)
+      appendLog(`Runtime build complete: ${draft.draftPath} (${draft.database.sampleCount} database samples, ${draft.poses.samples.length} pose value samples)`, draft.database.status === 'error' ? 'error' : draft.database.status === 'warning' ? 'warning' : 'info')
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Runtime build draft generation failed', 'error')
     } finally {
@@ -1226,7 +1226,7 @@ function RuntimeDraftView({
           <dt>Skeleton</dt>
           <dd>{`${draft.skeleton.status}, ${draft.skeleton.boneCount} bones`}</dd>
           <dt>Poses</dt>
-          <dd>{`${draft.poses.status}, ${draft.poses.plannedPoseSampleCount} samples`}</dd>
+          <dd>{`${draft.poses.status}, ${draft.poses.samples.length}/${draft.poses.plannedPoseSampleCount} values`}</dd>
           <dt>Features</dt>
           <dd>{`${draft.features.status}, ${draft.features.featureCount} channels`}</dd>
           <dt>Scale</dt>
@@ -1303,6 +1303,18 @@ function RuntimeDraftView({
         </div>
       </section>
       <section className="report-section">
+        <h3>Pose Values Preview</h3>
+        <div className="report-table">
+          {draft.poses.samples.length ? draft.poses.samples.slice(0, 12).map((sample, index) => (
+            <div key={`${sample.clipId}-${sample.isMirrored ? 'mirror' : 'source'}-${sample.frame}-${index}-pose`} className="report-row">
+              <span>{`${sample.clipName}${sample.isMirrored ? ' Mirror' : ''} F${sample.frame + 1}`}</span>
+              <span>{`${sample.bones.length} bones`}</span>
+              <span>{formatPoseBonePreview(sample.bones)}</span>
+            </div>
+          )) : <p>No pose values sampled</p>}
+        </div>
+      </section>
+      <section className="report-section">
         <h3>Feature Samples</h3>
         <div className="report-table">
           {draft.features.clips.length ? draft.features.clips.map((clip) => (
@@ -1320,7 +1332,7 @@ function RuntimeDraftView({
           <dt>Status</dt>
           <dd>{draft.database.status}</dd>
           <dt>Schema</dt>
-          <dd>{draft.database.schemaVersion}</dd>
+          <dd>{`${draft.database.schema.id} v${draft.database.schema.version}`}</dd>
           <dt>Clips</dt>
           <dd>{draft.database.clipCount}</dd>
           <dt>Samples</dt>
@@ -1416,7 +1428,11 @@ function DatabaseDraftView({
           <dt>Status</dt>
           <dd>{database.status}</dd>
           <dt>Schema</dt>
-          <dd>{database.schemaVersion}</dd>
+          <dd>{`${database.schema.id} v${database.schema.version}`}</dd>
+          <dt>Format</dt>
+          <dd>{database.schema.format}</dd>
+          <dt>Units</dt>
+          <dd>{database.schema.units}</dd>
           <dt>Clips</dt>
           <dd>{database.clipCount}</dd>
           <dt>Samples</dt>
@@ -2091,6 +2107,19 @@ function formatFeaturePreviewValues(values: Record<string, number | null>) {
     : '--'
 }
 
+function formatPoseBonePreview(bones: Array<{ boneName: string; translation: number[]; rotation: number[] }>) {
+  const bone = bones[0]
+  if (!bone) {
+    return '--'
+  }
+
+  return `${bone.boneName} T ${formatVector(bone.translation)} R ${formatVector(bone.rotation)}`
+}
+
+function formatVector(values: number[]) {
+  return `[${values.slice(0, 4).map((value) => formatNumber(value)).join(', ')}]`
+}
+
 function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
   const contract = {
     characterName: draft.characterName,
@@ -2114,6 +2143,7 @@ function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
     })),
     plannedSamples: {
       poseSamples: draft.poses.plannedPoseSampleCount,
+      poseValueSamples: draft.poses.samples.length,
       featureSamples: draft.features.plannedSampleCount,
       databaseSamples: draft.database.sampleCount,
     },
@@ -2483,7 +2513,7 @@ function CharacterInspector({
           onClick={onGenerateRuntimeBuildDraft}
         >
           {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
-          Generate Runtime Draft
+          Build Runtime
         </button>
         <button
           type="button"

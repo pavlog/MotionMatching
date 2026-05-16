@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using MotionMatching.Authoring;
@@ -492,10 +493,11 @@ public sealed class BrowserWorkspaceService
 
         var report = await GenerateBuildReportAsync(characterId, cancellationToken);
         var characterFolderName = GetCharacterFolderName(reference);
+        var characterRoot = Path.GetDirectoryName(characterManifestPath) ?? GetWorkspaceRoot();
         var draftPath = GetRuntimeBuildDraftPath(reference);
         var skeletonDraft = await BuildRuntimeSkeletonDraftAsync(reference, cancellationToken);
         var character = await ToCharacterResponseAsync(reference, cancellationToken);
-        var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips, normalizedSampleFrameStep);
+        var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips, normalizedSampleFrameStep, skeletonDraft, characterRoot);
         var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft, character.Clips, normalizedScaleMode);
         var databaseDraft = BuildRuntimeDatabaseDraft(poseDraft, featureDraft, character.Clips);
         var draft = new RuntimeBuildDraftResponse(
@@ -1062,7 +1064,9 @@ public sealed class BrowserWorkspaceService
     private static RuntimePoseDraftResponse BuildRuntimePoseDraft(
         BuildReadinessResponse readiness,
         IReadOnlyList<ClipResponse> clips,
-        int sampleFrameStep)
+        int sampleFrameStep,
+        RuntimeSkeletonDraftResponse skeletonDraft,
+        string characterRoot)
     {
         var clipsById = clips.ToDictionary(clip => clip.Id, StringComparer.Ordinal);
         var entries = readiness.PlanEntries
@@ -1080,6 +1084,13 @@ public sealed class BrowserWorkspaceService
                     clip?.DurationSeconds,
                     plannedSampleCount,
                     BuildSampleFramesPreview(clip?.FrameCount, sampleFrameStep));
+            })
+            .ToArray();
+        var samples = entries
+            .SelectMany(entry =>
+            {
+                clipsById.TryGetValue(entry.ClipId, out var clip);
+                return BuildRuntimePoseSamples(entry, clip, skeletonDraft, characterRoot, sampleFrameStep);
             })
             .ToArray();
 
@@ -1103,6 +1114,16 @@ public sealed class BrowserWorkspaceService
                 entry.ClipName));
         }
 
+        foreach (var entry in entries.Where(entry => entry.PlannedSampleCount > 0 && !samples.Any(sample => sample.ClipId == entry.ClipId && sample.IsMirrored == entry.IsMirrored)))
+        {
+            findings.Add(new BuildReadinessFindingResponse(
+                "warning",
+                "runtime_pose_values_unavailable",
+                $"{entry.ClipName} has no sampled pose values because clip preview GLB pose channels are unavailable.",
+                entry.ClipId,
+                entry.ClipName));
+        }
+
         var status = findings.Any(finding => finding.Severity == "error")
             ? "error"
             : findings.Any(finding => finding.Severity == "warning")
@@ -1114,7 +1135,72 @@ public sealed class BrowserWorkspaceService
             entries.Length,
             entries.Sum(entry => entry.PlannedSampleCount),
             entries,
+            samples,
             findings);
+    }
+
+    private static IReadOnlyList<RuntimePoseSampleResponse> BuildRuntimePoseSamples(
+        RuntimePoseClipDraftResponse poseClip,
+        ClipResponse? sourceClip,
+        RuntimeSkeletonDraftResponse skeletonDraft,
+        string characterRoot,
+        int sampleFrameStep)
+    {
+        if (sourceClip is null || sourceClip.FrameCount is null)
+        {
+            return [];
+        }
+
+        var clipRoot = Path.GetDirectoryName(Path.Combine(characterRoot, sourceClip.ManifestPath.Replace('/', Path.DirectorySeparatorChar)));
+        if (clipRoot is null)
+        {
+            return [];
+        }
+
+        var previewPath = GetClipPreviewPath(clipRoot);
+        if (!File.Exists(previewPath))
+        {
+            return [];
+        }
+
+        var frames = BuildSampleFrames(sourceClip.FrameCount, sampleFrameStep);
+        IReadOnlyList<GltfPoseSample> gltfSamples;
+        try
+        {
+            gltfSamples = GltfPoseSampler.ParseGlb(
+                previewPath,
+                frames,
+                sourceClip.FrameRate,
+                sourceClip.DurationSeconds,
+                skeletonDraft.BoneNames);
+        }
+        catch (IOException)
+        {
+            return [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+        catch (InvalidOperationException)
+        {
+            return [];
+        }
+
+        return gltfSamples
+            .Where(sample => sample.Bones.Count > 0)
+            .Select(sample => new RuntimePoseSampleResponse(
+                poseClip.ClipId,
+                poseClip.ClipName,
+                poseClip.IsMirrored,
+                sample.Frame,
+                sample.Seconds,
+                sample.Bones.Select(bone => new RuntimePoseBoneSampleResponse(
+                    bone.BoneName,
+                    MirrorTranslation(bone.Translation, poseClip.IsMirrored),
+                    MirrorRotation(bone.Rotation, poseClip.IsMirrored),
+                    bone.Scale)).ToArray()))
+            .ToArray();
     }
 
     private static RuntimeFeatureDraftResponse BuildRuntimeFeatureDraft(
@@ -1264,6 +1350,11 @@ public sealed class BrowserWorkspaceService
         return new RuntimeDatabaseDraftResponse(
             status,
             "motionstudio.runtime-database-draft.v0",
+            new RuntimeDatabaseSchemaResponse(
+                "motionstudio.runtime-database",
+                0,
+                "json-draft",
+                featureDraft.Scale.Mode),
             databaseClips.Length,
             poseDraft.PlannedPoseSampleCount,
             featureDraft.FeatureCount,
@@ -1304,6 +1395,20 @@ public sealed class BrowserWorkspaceService
             "right" => "left",
             _ => foot
         };
+    }
+
+    private static double[] MirrorTranslation(double[] value, bool isMirrored)
+    {
+        return isMirrored && value.Length >= 3
+            ? [-value[0], value[1], value[2]]
+            : value;
+    }
+
+    private static double[] MirrorRotation(double[] value, bool isMirrored)
+    {
+        return isMirrored && value.Length >= 4
+            ? [value[0], -value[1], -value[2], value[3]]
+            : value;
     }
 
     private static RuntimeFeatureScaleResponse BuildRuntimeFeatureScale(IReadOnlyList<ClipResponse> clips, string mode)

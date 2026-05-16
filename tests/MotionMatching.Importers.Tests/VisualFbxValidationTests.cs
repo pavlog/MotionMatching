@@ -292,6 +292,69 @@ public class VisualFbxValidationTests
     }
 
     [Fact]
+    public void GltfPoseSamplerReadsInterpolatedLocalBoneValues()
+    {
+        var binary = new byte[sizeof(float) * 2 + sizeof(float) * 3 * 2 + sizeof(float) * 4 * 2];
+        WriteFloat(binary, 0, 0.0f);
+        WriteFloat(binary, 4, 1.0f);
+        WriteFloat(binary, 8, 0.0f);
+        WriteFloat(binary, 12, 0.0f);
+        WriteFloat(binary, 16, 0.0f);
+        WriteFloat(binary, 20, 10.0f);
+        WriteFloat(binary, 24, 2.0f);
+        WriteFloat(binary, 28, -4.0f);
+        WriteFloat(binary, 32, 0.0f);
+        WriteFloat(binary, 36, 0.0f);
+        WriteFloat(binary, 40, 0.0f);
+        WriteFloat(binary, 44, 1.0f);
+        WriteFloat(binary, 48, 0.0f);
+        WriteFloat(binary, 52, 0.0f);
+        WriteFloat(binary, 56, 0.70710677f);
+        WriteFloat(binary, 60, 0.70710677f);
+        const string gltf = """
+            {
+              "nodes": [
+                { "name": "mixamorig:Hips" }
+              ],
+              "animations": [
+                {
+                  "samplers": [
+                    { "input": 0, "output": 1 },
+                    { "input": 0, "output": 2 }
+                  ],
+                  "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "translation" } },
+                    { "sampler": 1, "target": { "node": 0, "path": "rotation" } }
+                  ]
+                }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 8 },
+                { "buffer": 0, "byteOffset": 8, "byteLength": 24 },
+                { "buffer": 0, "byteOffset": 32, "byteLength": 32 }
+              ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR" },
+                { "bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3" },
+                { "bufferView": 2, "componentType": 5126, "count": 2, "type": "VEC4" }
+              ]
+            }
+            """;
+
+        var samples = GltfPoseSampler.ParseGltfJson(gltf, binary, [0, 15], frameRate: 30, durationSeconds: 1, ["Hips"]);
+
+        Assert.Equal(2, samples.Count);
+        var mid = samples[1];
+        var bone = Assert.Single(mid.Bones);
+        Assert.Equal("mixamorig:Hips", bone.BoneName);
+        Assert.Equal(5, bone.Translation[0], precision: 3);
+        Assert.Equal(1, bone.Translation[1], precision: 3);
+        Assert.Equal(-2, bone.Translation[2], precision: 3);
+        Assert.Equal(0.5, mid.Seconds, precision: 3);
+        Assert.Equal(1, bone.Scale[0], precision: 3);
+    }
+
+    [Fact]
     public void GltfFootContactDiagnosticsParserReadsLowVelocityRanges()
     {
         var binary = new byte[sizeof(float) * 4 + sizeof(float) * 3 * 4];

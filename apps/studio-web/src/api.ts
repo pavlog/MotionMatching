@@ -203,6 +203,7 @@ export interface RuntimePoseDraftResponse {
   clipCount: number
   plannedPoseSampleCount: number
   clips: RuntimePoseClipDraftResponse[]
+  samples: RuntimePoseSampleResponse[]
   findings: BuildReadinessFindingResponse[]
 }
 
@@ -216,6 +217,22 @@ export interface RuntimePoseClipDraftResponse {
   durationSeconds: number | null
   plannedSampleCount: number
   sampleFramesPreview: number[]
+}
+
+export interface RuntimePoseSampleResponse {
+  clipId: string
+  clipName: string
+  isMirrored: boolean
+  frame: number
+  seconds: number
+  bones: RuntimePoseBoneSampleResponse[]
+}
+
+export interface RuntimePoseBoneSampleResponse {
+  boneName: string
+  translation: number[]
+  rotation: number[]
+  scale: number[]
 }
 
 export interface RuntimeFeatureDraftResponse {
@@ -276,6 +293,7 @@ export interface RuntimeFeatureSamplePreviewResponse {
 export interface RuntimeDatabaseDraftResponse {
   status: 'ok' | 'warning' | 'error'
   schemaVersion: string
+  schema: RuntimeDatabaseSchemaResponse
   clipCount: number
   sampleCount: number
   featureCount: number
@@ -284,6 +302,13 @@ export interface RuntimeDatabaseDraftResponse {
   samples: RuntimeDatabaseSampleResponse[]
   samplePreviews: RuntimeDatabaseSamplePreviewResponse[]
   findings: BuildReadinessFindingResponse[]
+}
+
+export interface RuntimeDatabaseSchemaResponse {
+  id: string
+  version: number
+  format: string
+  units: string
 }
 
 export interface RuntimeDatabaseClipResponse {

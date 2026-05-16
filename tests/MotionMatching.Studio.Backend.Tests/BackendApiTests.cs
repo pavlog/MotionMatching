@@ -464,10 +464,11 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"fileName\":\"IyoMixamo.mmfeatures\"", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmdatabase\"", draftJson);
         Assert.Contains("\"plannedPoseSampleCount\":21", draftJson);
+        Assert.Contains("\"samples\"", draftJson);
         Assert.Contains("\"featureCount\":7", draftJson);
+        Assert.Contains("\"schema\":{\"id\":\"motionstudio.runtime-database\",\"version\":0", draftJson);
         Assert.Contains("\"schemaVersion\":\"motionstudio.runtime-database-draft.v0\"", draftJson);
         Assert.Contains("\"sampleCount\":21", draftJson);
-        Assert.Contains("\"samples\"", draftJson);
         Assert.Contains("\"name\":\"trajectory_position\"", draftJson);
         Assert.Contains("\"scale\"", draftJson);
         Assert.Contains("\"mode\":\"source_x0_01\"", draftJson);
@@ -499,6 +500,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"clipName\": \"RunForward\"", persistedPoseJson);
         Assert.Contains("\"plannedSampleCount\": 21", persistedPoseJson);
         Assert.Contains("\"sampleFramesPreview\": [", persistedPoseJson);
+        Assert.Contains("\"samples\":", persistedPoseJson);
         Assert.DoesNotContain(_workspaceRoot, persistedPoseJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedPoseJson);
         var persistedFeatureJson = await File.ReadAllTextAsync(featurePath);
@@ -512,6 +514,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.DoesNotContain(Path.GetTempPath(), persistedFeatureJson);
         var persistedDatabaseJson = await File.ReadAllTextAsync(databasePath);
         Assert.Contains("\"schemaVersion\": \"motionstudio.runtime-database-draft.v0\"", persistedDatabaseJson);
+        Assert.Contains("\"id\": \"motionstudio.runtime-database\"", persistedDatabaseJson);
         Assert.Contains("\"clipName\": \"RunForward\"", persistedDatabaseJson);
         Assert.Contains("\"samples\": [", persistedDatabaseJson);
         Assert.Contains("\"frame\": 40", persistedDatabaseJson);
