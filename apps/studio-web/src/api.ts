@@ -281,6 +281,7 @@ export interface RuntimeDatabaseDraftResponse {
   featureCount: number
   scale: RuntimeFeatureScaleResponse
   clips: RuntimeDatabaseClipResponse[]
+  samples: RuntimeDatabaseSampleResponse[]
   samplePreviews: RuntimeDatabaseSamplePreviewResponse[]
   findings: BuildReadinessFindingResponse[]
 }
@@ -302,6 +303,14 @@ export interface RuntimeDatabaseContactTrackResponse {
 export interface RuntimeDatabaseSamplePreviewResponse {
   clipId: string
   clipName: string
+  isMirrored: boolean
+  frame: number
+  seconds: number
+  features: Record<string, number | null>
+}
+
+export interface RuntimeDatabaseSampleResponse {
+  clipId: string
   isMirrored: boolean
   frame: number
   seconds: number

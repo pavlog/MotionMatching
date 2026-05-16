@@ -1208,14 +1208,32 @@ public sealed class BrowserWorkspaceService
                     footContacts);
             })
             .ToArray();
-        var samplePreviews = featureDraft.SamplePreviews
-            .Select(sample => new RuntimeDatabaseSamplePreviewResponse(
-                sample.ClipId,
-                sample.ClipName,
-                sample.IsMirrored,
-                sample.Frame,
-                sample.Seconds,
-                sample.Values))
+        var samples = poseDraft.Clips
+            .SelectMany(clip =>
+            {
+                clipsById.TryGetValue(clip.ClipId, out var sourceClip);
+                return BuildSampleFrames(clip.FrameCount, poseDraft.SampleFrameStep)
+                    .Select(frame => BuildRuntimeDatabaseSample(
+                        clip,
+                        sourceClip,
+                        frame,
+                        featureDraft.Channels,
+                        featureDraft.Scale.NormalizationFactor));
+            })
+            .ToArray();
+        var samplePreviews = samples
+            .Take(18)
+            .Select(sample =>
+            {
+                var clip = poseDraft.Clips.FirstOrDefault(item => item.ClipId == sample.ClipId && item.IsMirrored == sample.IsMirrored);
+                return new RuntimeDatabaseSamplePreviewResponse(
+                    sample.ClipId,
+                    clip?.ClipName ?? sample.ClipId,
+                    sample.IsMirrored,
+                    sample.Frame,
+                    sample.Seconds,
+                    sample.Features);
+            })
             .ToArray();
         var findings = new List<BuildReadinessFindingResponse>();
         if (poseDraft.Status == "error" || featureDraft.Status == "error")
@@ -1251,8 +1269,31 @@ public sealed class BrowserWorkspaceService
             featureDraft.FeatureCount,
             featureDraft.Scale,
             databaseClips,
+            samples,
             samplePreviews,
             findings);
+    }
+
+    private static RuntimeDatabaseSampleResponse BuildRuntimeDatabaseSample(
+        RuntimePoseClipDraftResponse poseClip,
+        ClipResponse? sourceClip,
+        int frame,
+        IReadOnlyList<RuntimeFeatureChannelResponse> channels,
+        double normalizationFactor)
+    {
+        var sample = BuildRuntimeFeatureSamplePreview(
+            poseClip,
+            sourceClip,
+            frame,
+            channels,
+            normalizationFactor);
+
+        return new RuntimeDatabaseSampleResponse(
+            sample.ClipId,
+            sample.IsMirrored,
+            sample.Frame,
+            sample.Seconds,
+            sample.Values);
     }
 
     private static string MirrorFootName(string foot)
@@ -1337,6 +1378,22 @@ public sealed class BrowserWorkspaceService
         if (frames.Count < 8 && !frames.Contains(lastFrame))
         {
             frames.Add(lastFrame);
+        }
+
+        return frames;
+    }
+
+    private static IReadOnlyList<int> BuildSampleFrames(int? frameCount, int sampleFrameStep)
+    {
+        if (frameCount is null || frameCount <= 0)
+        {
+            return [];
+        }
+
+        var frames = new List<int>();
+        for (var frame = 0; frame < frameCount.Value; frame += sampleFrameStep)
+        {
+            frames.Add(frame);
         }
 
         return frames;

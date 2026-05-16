@@ -245,6 +245,7 @@ public sealed record RuntimeDatabaseDraftResponse(
     int FeatureCount,
     RuntimeFeatureScaleResponse Scale,
     IReadOnlyList<RuntimeDatabaseClipResponse> Clips,
+    IReadOnlyList<RuntimeDatabaseSampleResponse> Samples,
     IReadOnlyList<RuntimeDatabaseSamplePreviewResponse> SamplePreviews,
     IReadOnlyList<BuildReadinessFindingResponse> Findings);
 
@@ -263,6 +264,13 @@ public sealed record RuntimeDatabaseContactTrackResponse(
 public sealed record RuntimeDatabaseSamplePreviewResponse(
     string ClipId,
     string ClipName,
+    bool IsMirrored,
+    int Frame,
+    double Seconds,
+    IReadOnlyDictionary<string, double?> Features);
+
+public sealed record RuntimeDatabaseSampleResponse(
+    string ClipId,
     bool IsMirrored,
     int Frame,
     double Seconds,

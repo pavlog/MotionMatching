@@ -467,6 +467,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"featureCount\":7", draftJson);
         Assert.Contains("\"schemaVersion\":\"motionstudio.runtime-database-draft.v0\"", draftJson);
         Assert.Contains("\"sampleCount\":21", draftJson);
+        Assert.Contains("\"samples\"", draftJson);
         Assert.Contains("\"name\":\"trajectory_position\"", draftJson);
         Assert.Contains("\"scale\"", draftJson);
         Assert.Contains("\"mode\":\"source_x0_01\"", draftJson);
@@ -512,6 +513,8 @@ public sealed class BackendApiTests : IAsyncLifetime
         var persistedDatabaseJson = await File.ReadAllTextAsync(databasePath);
         Assert.Contains("\"schemaVersion\": \"motionstudio.runtime-database-draft.v0\"", persistedDatabaseJson);
         Assert.Contains("\"clipName\": \"RunForward\"", persistedDatabaseJson);
+        Assert.Contains("\"samples\": [", persistedDatabaseJson);
+        Assert.Contains("\"frame\": 40", persistedDatabaseJson);
         Assert.Contains("\"features\": {", persistedDatabaseJson);
         Assert.DoesNotContain(_workspaceRoot, persistedDatabaseJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedDatabaseJson);

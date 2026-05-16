@@ -5,6 +5,7 @@ import {
   type BuildReportResponse,
   type CharacterResponse,
   type ContactDetectionPreset,
+  type RuntimeDatabaseDraftResponse,
   type RuntimeBuildDraftResponse,
   type RuntimeScaleMode,
   type WorkspaceResponse,
@@ -58,6 +59,8 @@ type TextViewer = {
   text?: string
   report?: BuildReportResponse
   runtimeDraft?: RuntimeBuildDraftResponse
+  databaseDraft?: RuntimeDatabaseDraftResponse
+  databasePath?: string
   currentReadiness?: CharacterResponse['buildReadiness']
 }
 
@@ -689,6 +692,27 @@ function App() {
     }
   }
 
+  async function handleViewRuntimeDatabaseDraft(character: CharacterResponse) {
+    const cachedDraft = lastRuntimeDraft?.characterId === character.id ? lastRuntimeDraft : null
+    if (cachedDraft) {
+      openRuntimeDatabaseDraftViewer(cachedDraft)
+      return
+    }
+
+    setIsBusy(true)
+    appendLog(`Loading runtime database draft for ${character.name}`)
+    try {
+      const draft = await getRuntimeBuildDraft(character.id)
+      setLastRuntimeDraft(draft)
+      openRuntimeDatabaseDraftViewer(draft)
+      appendLog(`Opened runtime database draft: ${runtimeDatabasePathFromDraft(draft)}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Runtime database draft load failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   function openBuildReportViewer(report: BuildReportResponse, currentReadiness: CharacterResponse['buildReadiness']) {
     setTextViewer({
       heading: 'Build Report',
@@ -704,6 +728,16 @@ function App() {
       title: draft.draftPath,
       runtimeDraft: draft,
       currentReadiness,
+    })
+  }
+
+  function openRuntimeDatabaseDraftViewer(draft: RuntimeBuildDraftResponse) {
+    const databasePath = runtimeDatabasePathFromDraft(draft)
+    setTextViewer({
+      heading: 'Database Draft',
+      title: databasePath,
+      databaseDraft: draft.database,
+      databasePath,
     })
   }
 
@@ -858,6 +892,7 @@ function App() {
             onGenerateRuntimeBuildDraft={() => handleGenerateRuntimeBuildDraft(selectedCharacter)}
             onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
             onViewRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
+            onViewRuntimeDatabaseDraft={() => handleViewRuntimeDatabaseDraft(selectedCharacter)}
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
@@ -951,6 +986,8 @@ function App() {
           text={textViewer.text}
           report={textViewer.report}
           runtimeDraft={textViewer.runtimeDraft}
+          databaseDraft={textViewer.databaseDraft}
+          databasePath={textViewer.databasePath}
           currentReadiness={textViewer.currentReadiness}
           onClose={() => setTextViewer(null)}
         />
@@ -965,6 +1002,8 @@ function TextModal({
   text,
   report,
   runtimeDraft,
+  databaseDraft,
+  databasePath,
   currentReadiness,
   onClose,
 }: {
@@ -973,6 +1012,8 @@ function TextModal({
   text?: string
   report?: BuildReportResponse
   runtimeDraft?: RuntimeBuildDraftResponse
+  databaseDraft?: RuntimeDatabaseDraftResponse
+  databasePath?: string
   currentReadiness?: CharacterResponse['buildReadiness']
   onClose: () => void
 }) {
@@ -1009,6 +1050,8 @@ function TextModal({
           <BuildReportView report={report} currentReadiness={currentReadiness} />
         ) : runtimeDraft ? (
           <RuntimeDraftView draft={runtimeDraft} currentReadiness={currentReadiness} />
+        ) : databaseDraft ? (
+          <DatabaseDraftView database={databaseDraft} path={databasePath ?? title} />
         ) : (
           <pre className="report-modal-text">{text}</pre>
         )}
@@ -1326,8 +1369,8 @@ function RuntimeDraftView({
       <section className="report-section">
         <h3>Runtime Findings</h3>
         <div className="report-table">
-          {[...draft.skeleton.findings, ...draft.poses.findings, ...draft.features.findings].length ? (
-            [...draft.skeleton.findings, ...draft.poses.findings, ...draft.features.findings].map((finding, index) => (
+          {[...draft.skeleton.findings, ...draft.poses.findings, ...draft.features.findings, ...draft.database.findings].length ? (
+            [...draft.skeleton.findings, ...draft.poses.findings, ...draft.features.findings, ...draft.database.findings].map((finding, index) => (
               <div key={`${finding.severity}-${finding.code}-${index}`} className={`report-row ${finding.severity}`}>
                 <span>{finding.clipName ?? 'Runtime'}</span>
                 <span>{finding.code}</span>
@@ -1340,6 +1383,93 @@ function RuntimeDraftView({
       <section className="report-section">
         <h3>Raw JSON</h3>
         <pre className="report-modal-text raw">{JSON.stringify(draft, null, 2)}</pre>
+      </section>
+    </div>
+  )
+}
+
+function DatabaseDraftView({
+  database,
+  path,
+}: {
+  database: RuntimeDatabaseDraftResponse
+  path: string
+}) {
+  const [jsonCopyState, setJsonCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+
+  async function copyDatabaseJson() {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(database, null, 2))
+      setJsonCopyState('copied')
+    } catch {
+      setJsonCopyState('failed')
+    }
+  }
+
+  return (
+    <div className="report-view">
+      <section className="report-section">
+        <h3>Summary</h3>
+        <dl className="report-summary-grid">
+          <dt>Path</dt>
+          <dd>{path}</dd>
+          <dt>Status</dt>
+          <dd>{database.status}</dd>
+          <dt>Schema</dt>
+          <dd>{database.schemaVersion}</dd>
+          <dt>Clips</dt>
+          <dd>{database.clipCount}</dd>
+          <dt>Samples</dt>
+          <dd>{database.sampleCount}</dd>
+          <dt>Features</dt>
+          <dd>{database.featureCount}</dd>
+          <dt>Scale</dt>
+          <dd>{`${formatRuntimeScaleMode(database.scale.mode)}, x${formatNumber(database.scale.normalizationFactor)}`}</dd>
+        </dl>
+        <button type="button" className="inspector-action" onClick={copyDatabaseJson}>
+          <Copy size={14} aria-hidden="true" />
+          {jsonCopyState === 'copied' ? 'Copied JSON' : jsonCopyState === 'failed' ? 'Copy Failed' : 'Copy JSON'}
+        </button>
+      </section>
+      <section className="report-section">
+        <h3>Clips</h3>
+        <div className="report-table">
+          {database.clips.length ? database.clips.map((clip) => (
+            <div key={`${clip.clipId}-${clip.isMirrored ? 'mirror' : 'source'}-database-view`} className={`report-row ${clip.footContacts.length ? 'ok' : 'warning'}`}>
+              <span>{clip.clipName}</span>
+              <span>{clip.clipRole ?? 'Unassigned'}{clip.isMirrored ? ' mirror' : ''}</span>
+              <span>{`${clip.plannedSampleCount} samples, ${clip.footContacts.length} contact tracks`}</span>
+            </div>
+          )) : <p>No database clips planned</p>}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Samples Preview</h3>
+        <div className="report-table">
+          {database.samplePreviews.length ? database.samplePreviews.slice(0, 24).map((sample, index) => (
+            <div key={`${sample.clipId}-${sample.isMirrored ? 'mirror' : 'source'}-${sample.frame}-${index}`} className="report-row">
+              <span>{`${sample.clipName}${sample.isMirrored ? ' Mirror' : ''} F${sample.frame + 1}`}</span>
+              <span>{`${formatNumber(sample.seconds)}s`}</span>
+              <span>{formatFeaturePreviewValues(sample.features)}</span>
+            </div>
+          )) : <p>No database samples</p>}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Findings</h3>
+        <div className="report-table">
+          {database.findings.length ? database.findings.map((finding, index) => (
+            <div key={`${finding.severity}-${finding.code}-${index}`} className={`report-row ${finding.severity}`}>
+              <span>{finding.clipName ?? 'Database'}</span>
+              <span>{finding.code}</span>
+              <span>{finding.message}</span>
+            </div>
+          )) : <p>No database findings</p>}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Raw JSON</h3>
+        <pre className="report-modal-text raw">{JSON.stringify(database, null, 2)}</pre>
       </section>
     </div>
   )
@@ -2009,6 +2139,12 @@ function runtimeDraftPathsText(draft: RuntimeBuildDraftResponse) {
   ].join('\n')
 }
 
+function runtimeDatabasePathFromDraft(draft: RuntimeBuildDraftResponse) {
+  const buildFolder = draft.draftPath.split('/').slice(0, -1).join('/')
+  const databaseArtifact = draft.artifacts.find((artifact) => artifact.kind === 'database')
+  return databaseArtifact ? `${buildFolder}/${databaseArtifact.fileName}` : `${buildFolder}/${draft.characterName}.mmdatabase`
+}
+
 function formatRuntimeScaleMode(mode: RuntimeScaleMode) {
   return runtimeScaleModes.find((item) => item.value === mode)?.label ?? 'Auto'
 }
@@ -2259,6 +2395,7 @@ function CharacterInspector({
   onGenerateRuntimeBuildDraft,
   onViewBuildReport,
   onViewRuntimeDraft,
+  onViewRuntimeDatabaseDraft,
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
   onSelectClip,
@@ -2276,6 +2413,7 @@ function CharacterInspector({
   onGenerateRuntimeBuildDraft: () => void
   onViewBuildReport: () => void
   onViewRuntimeDraft: () => void
+  onViewRuntimeDatabaseDraft: () => void
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
   onSelectClip: (clipId: string) => void
@@ -2366,6 +2504,16 @@ function CharacterInspector({
         >
           <FileText size={14} aria-hidden="true" />
           {lastRuntimeDraft ? 'View Runtime Draft' : character.runtimeBuildDraftPath ? 'Load Runtime Draft' : 'View Runtime Draft'}
+        </button>
+        <button
+          type="button"
+          className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`}
+          disabled={isBusy || !hasRuntimeDraft}
+          onClick={onViewRuntimeDatabaseDraft}
+          title={formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}
+        >
+          <FileText size={14} aria-hidden="true" />
+          View Database Draft
         </button>
       </section>
       <BuildReadinessPanel character={character} onSelectClip={onSelectClip} />
