@@ -36,6 +36,79 @@
         "type": "string"
       }
     },
+    "samplings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "capsule",
+          "facing",
+          "velocity",
+          "trajectory"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^smp_[a-f0-9]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capsule": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "height",
+              "radius"
+            ],
+            "properties": {
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "radius": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "facing": {
+            "$ref": "#/$defs/vector3"
+          },
+          "velocity": {
+            "$ref": "#/$defs/vector3"
+          },
+          "trajectory": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "frameOffset",
+                "position",
+                "direction"
+              ],
+              "properties": {
+                "frameOffset": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "position": {
+                  "$ref": "#/$defs/vector3"
+                },
+                "direction": {
+                  "$ref": "#/$defs/vector3"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "runtimeBuildSettings": {
       "type": "object",
       "additionalProperties": false,
@@ -57,6 +130,25 @@
           ]
         }
       }
+    }
+  },
+  "$defs": {
+    "vector3": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
     }
   }
 }

@@ -154,7 +154,8 @@ public sealed class BrowserWorkspaceService
         {
             Id = StudioId.New("chr"),
             Name = characterName,
-            VisualManifestPath = "Visual/visual.json"
+            VisualManifestPath = "Visual/visual.json",
+            Samplings = [CreateDefaultSampling("Forward query")]
         };
 
         await WriteManifestAsync(Path.Combine(visualRoot, "visual.json"), visual, cancellationToken);
@@ -199,6 +200,7 @@ public sealed class BrowserWorkspaceService
             ToPortablePath("Characters", characterFolderName, "character.json"),
             character.VisualManifestPath,
             [],
+            ToSamplingQueryResponses(character.Samplings),
             previewUrl,
             ToValidationResponse(validation),
             BuildReadiness([], ToValidationResponse(validation)),
@@ -208,6 +210,71 @@ public sealed class BrowserWorkspaceService
             "none",
             ToRuntimeBuildSettingsResponse(character.RuntimeBuildSettings),
             importLog);
+    }
+
+    public async Task<CharacterResponse> CreateSamplingQueryAsync(
+        string characterId,
+        SamplingQueryCreateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+        var (characterManifestPath, manifest) = await ReadCharacterManifestAsync(reference, cancellationToken);
+        var sampling = CreateDefaultSampling(NormalizeSamplingName(request.Name, manifest.Samplings));
+
+        var updatedManifest = manifest with
+        {
+            Samplings = [.. manifest.Samplings, sampling]
+        };
+        await WriteManifestAsync(characterManifestPath, updatedManifest, cancellationToken);
+        return await ToCharacterResponseAsync(reference, cancellationToken);
+    }
+
+    public async Task<CharacterResponse> UpdateSamplingQueryAsync(
+        string characterId,
+        string samplingId,
+        SamplingQueryUpdateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+        var (characterManifestPath, manifest) = await ReadCharacterManifestAsync(reference, cancellationToken);
+        var index = manifest.Samplings.FindIndex(sampling => sampling.Id.Value == samplingId);
+        if (index < 0)
+        {
+            throw new KeyNotFoundException("Sampling query was not found.");
+        }
+
+        var nextSamplings = manifest.Samplings.ToList();
+        nextSamplings[index] = nextSamplings[index] with
+        {
+            Name = NormalizeSamplingName(request.Name, manifest.Samplings, samplingId)
+        };
+        await WriteManifestAsync(characterManifestPath, manifest with { Samplings = nextSamplings }, cancellationToken);
+        return await ToCharacterResponseAsync(reference, cancellationToken);
+    }
+
+    public async Task<CharacterResponse> DeleteSamplingQueryAsync(
+        string characterId,
+        string samplingId,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+        var (characterManifestPath, manifest) = await ReadCharacterManifestAsync(reference, cancellationToken);
+        var nextSamplings = manifest.Samplings
+            .Where(sampling => sampling.Id.Value != samplingId)
+            .ToList();
+        if (nextSamplings.Count == manifest.Samplings.Count)
+        {
+            throw new KeyNotFoundException("Sampling query was not found.");
+        }
+
+        await WriteManifestAsync(characterManifestPath, manifest with { Samplings = nextSamplings }, cancellationToken);
+        return await ToCharacterResponseAsync(reference, cancellationToken);
     }
 
     public async Task<CharacterResponse> ImportClipAsync(
@@ -697,6 +764,7 @@ public sealed class BrowserWorkspaceService
             reference.ManifestPath,
             manifest.VisualManifestPath,
             clips,
+            ToSamplingQueryResponses(manifest.Samplings),
             previewUrl,
             validation,
             buildReadiness,
@@ -706,6 +774,58 @@ public sealed class BrowserWorkspaceService
             runtimeBuildDraftStatus,
             ToRuntimeBuildSettingsResponse(manifest.RuntimeBuildSettings),
             importLog);
+    }
+
+    private static IReadOnlyList<SamplingQueryResponse> ToSamplingQueryResponses(IReadOnlyList<SamplingQueryManifest> samplings)
+    {
+        return samplings
+            .Select(sampling => new SamplingQueryResponse(
+                sampling.Id.Value,
+                sampling.Name,
+                new SamplingCapsuleResponse(sampling.Capsule.Height, sampling.Capsule.Radius),
+                sampling.Facing,
+                sampling.Velocity,
+                sampling.Trajectory.Select(point => new SamplingTrajectoryPointResponse(
+                    point.FrameOffset,
+                    point.Position,
+                    point.Direction)).ToArray()))
+            .ToArray();
+    }
+
+    private static SamplingQueryManifest CreateDefaultSampling(string name)
+    {
+        return new SamplingQueryManifest
+        {
+            Id = StudioId.New("smp"),
+            Name = name
+        };
+    }
+
+    private static string NormalizeSamplingName(
+        string? requestedName,
+        IReadOnlyList<SamplingQueryManifest> existingSamplings,
+        string? currentSamplingId = null)
+    {
+        var baseName = string.IsNullOrWhiteSpace(requestedName) ? "Sampling" : requestedName.Trim();
+        var usedNames = existingSamplings
+            .Where(sampling => sampling.Id.Value != currentSamplingId)
+            .Select(sampling => sampling.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!usedNames.Contains(baseName))
+        {
+            return baseName;
+        }
+
+        for (var index = 2; index < 1000; index++)
+        {
+            var candidate = $"{baseName} {index}";
+            if (!usedNames.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return $"{baseName} {DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
     }
 
     private async Task<(string ManifestPath, CharacterManifest Manifest)> ReadCharacterManifestAsync(

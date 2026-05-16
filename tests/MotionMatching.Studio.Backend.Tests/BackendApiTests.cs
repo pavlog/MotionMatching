@@ -63,6 +63,8 @@ public sealed class BackendApiTests : IAsyncLifetime
 
         response.EnsureSuccessStatusCode();
         Assert.Contains("\"name\":\"IyoMixamo\"", responseJson);
+        Assert.Contains("\"samplings\":[", responseJson);
+        Assert.Contains("\"name\":\"Forward query\"", responseJson);
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "Visual", "source.fbx")));
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "Visual", "visual.json")));
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "character.json")));
@@ -74,6 +76,44 @@ public sealed class BackendApiTests : IAsyncLifetime
 
         using var workspaceJson = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(_workspaceRoot, "workspace.json")));
         Assert.Equal("Characters/IyoMixamo/character.json", workspaceJson.RootElement.GetProperty("characters")[0].GetProperty("manifestPath").GetString());
+    }
+
+    [Fact]
+    public async Task SamplingQueriesCanBeCreatedRenamedAndDeleted()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        await client.PostAsync("/api/v1/workspaces/browser", content: null);
+
+        using var characterForm = new MultipartFormDataContent();
+        characterForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("fake fbx bytes")), "visual", "IyoMixamo.fbx");
+
+        var characterResponse = await client.PostAsync("/api/v1/workspaces/browser/characters", characterForm);
+        characterResponse.EnsureSuccessStatusCode();
+        using var characterJson = JsonDocument.Parse(await characterResponse.Content.ReadAsStringAsync());
+        var characterId = characterJson.RootElement.GetProperty("id").GetString();
+
+        var createResponse = await client.PostAsJsonAsync($"/api/v1/workspaces/browser/characters/{characterId}/samplings", new { name = "Turn right query" });
+        var createJson = await createResponse.Content.ReadAsStringAsync();
+        createResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"name\":\"Turn right query\"", createJson);
+        using var createdDocument = JsonDocument.Parse(createJson);
+        var samplingId = createdDocument.RootElement.GetProperty("samplings")[1].GetProperty("id").GetString();
+
+        var renameResponse = await client.PatchAsJsonAsync($"/api/v1/workspaces/browser/characters/{characterId}/samplings/{samplingId}", new { name = "Turn right 90" });
+        var renameJson = await renameResponse.Content.ReadAsStringAsync();
+        renameResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"name\":\"Turn right 90\"", renameJson);
+
+        var deleteResponse = await client.DeleteAsync($"/api/v1/workspaces/browser/characters/{characterId}/samplings/{samplingId}");
+        var deleteJson = await deleteResponse.Content.ReadAsStringAsync();
+        deleteResponse.EnsureSuccessStatusCode();
+        Assert.DoesNotContain("\"name\":\"Turn right 90\"", deleteJson);
+
+        var manifestJson = await File.ReadAllTextAsync(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "character.json"));
+        Assert.Contains("\"samplings\": [", manifestJson);
+        Assert.DoesNotContain(_workspaceRoot, manifestJson);
+        Assert.DoesNotContain(Path.GetTempPath(), manifestJson);
     }
 
     [Fact]

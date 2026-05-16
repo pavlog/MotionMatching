@@ -17,7 +17,45 @@ public sealed record CharacterManifest
 
     public List<string> ClipManifestPaths { get; init; } = [];
 
+    public List<SamplingQueryManifest> Samplings { get; init; } = [];
+
     public RuntimeBuildSettings RuntimeBuildSettings { get; init; } = new();
+}
+
+public sealed record SamplingQueryManifest
+{
+    public required StudioId Id { get; init; }
+
+    public required string Name { get; init; }
+
+    public SamplingCapsuleManifest Capsule { get; init; } = new();
+
+    public double[] Facing { get; init; } = [0, 0, 1];
+
+    public double[] Velocity { get; init; } = [0, 0, 1];
+
+    public List<SamplingTrajectoryPointManifest> Trajectory { get; init; } =
+    [
+        new() { FrameOffset = 20, Position = [0, 0, 28], Direction = [0, 0, 1] },
+        new() { FrameOffset = 40, Position = [10, 0, 60], Direction = [0, 0, 1] },
+        new() { FrameOffset = 60, Position = [18, 0, 96], Direction = [0, 0, 1] }
+    ];
+}
+
+public sealed record SamplingCapsuleManifest
+{
+    public double Height { get; init; } = 72;
+
+    public double Radius { get; init; } = 14;
+}
+
+public sealed record SamplingTrajectoryPointManifest
+{
+    public int FrameOffset { get; init; }
+
+    public double[] Position { get; init; } = [0, 0, 0];
+
+    public double[] Direction { get; init; } = [0, 0, 1];
 }
 
 public sealed record RuntimeBuildSettings

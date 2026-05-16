@@ -8,10 +8,13 @@ import {
   type RuntimeDatabaseDraftResponse,
   type RuntimeBuildDraftResponse,
   type RuntimeScaleMode,
+  type SamplingQueryResponse,
   type WorkspaceResponse,
+  createSamplingQuery,
   createBrowserWorkspace,
   deleteCharacter,
   deleteClip,
+  deleteSamplingQuery,
   exportRuntimeBuild,
   generateBuildReport,
   generateRuntimeBuildDraft,
@@ -21,6 +24,7 @@ import {
   refreshFootContacts,
   replaceClipSource,
   resolveAssetUrl,
+  updateSamplingQuery,
   updateClipSettings,
   updateRuntimeBuildSettings,
   uploadClip,
@@ -38,6 +42,7 @@ interface LogEntry {
 type Selection =
   | { type: 'character'; characterId: string }
   | { type: 'clip'; characterId: string; clipId: string }
+  | { type: 'sampling'; characterId: string; samplingId: string }
 
 type ClipContextMenu = {
   characterId: string
@@ -50,6 +55,14 @@ type ClipContextMenu = {
 type CharacterContextMenu = {
   characterId: string
   characterName: string
+  x: number
+  y: number
+}
+
+type SamplingContextMenu = {
+  characterId: string
+  samplingId: string
+  samplingName: string
   x: number
   y: number
 }
@@ -85,7 +98,6 @@ const clipRoles = [
 
 const defaultClipTags = ['neutral', 'calm', 'happy', 'angry', 'sad', 'tired', 'injured', 'combat', 'stealth', 'relaxed']
 const legacyActionTags = ['idle', 'walk', 'run', 'turn', 'start', 'stop', 'jump', 'loop']
-
 const contactDetectionPresets: Array<{ value: ContactDetectionPreset; label: string }> = [
   { value: 'auto', label: 'Auto' },
   { value: 'source_scale', label: 'Source scale' },
@@ -118,6 +130,7 @@ function App() {
   const [characterInspectorTab, setCharacterInspectorTab] = useState<CharacterInspectorTab>('overview')
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenu | null>(null)
   const [characterContextMenu, setCharacterContextMenu] = useState<CharacterContextMenu | null>(null)
+  const [samplingContextMenu, setSamplingContextMenu] = useState<SamplingContextMenu | null>(null)
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
   const [lastRuntimeDraft, setLastRuntimeDraft] = useState<RuntimeBuildDraftResponse | null>(null)
   const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
@@ -146,6 +159,10 @@ function App() {
   const visibleRuntimeSettingsSaveState = selectedRuntimeSettingsSaveState && selectedRuntimeSettingsSaveState.characterId === selectedCharacter?.id
     ? selectedRuntimeSettingsSaveState.state
     : 'idle'
+  const selectedSampling = useMemo(
+    () => selectedCharacter?.samplings.find((sampling) => selection?.type === 'sampling' && sampling.id === selection.samplingId) ?? null,
+    [selectedCharacter, selection],
+  )
   const isSamplingPreviewActive = Boolean(selectedCharacter && !selectedClip && characterInspectorTab === 'sampling')
 
   useEffect(() => {
@@ -203,12 +220,20 @@ function App() {
   const selectClip = useCallback((characterId: string, clipId: string) => {
     resetTimeline()
     setSelection({ type: 'clip', characterId, clipId })
+    setCharacterInspectorTab('overview')
+  }, [resetTimeline])
+
+  const selectSampling = useCallback((characterId: string, samplingId: string) => {
+    resetTimeline()
+    setSelection({ type: 'sampling', characterId, samplingId })
+    setCharacterInspectorTab('sampling')
   }, [resetTimeline])
 
   const openClipContextMenu = useCallback((event: React.MouseEvent, characterId: string, clip: ClipResponse) => {
     event.preventDefault()
     selectClip(characterId, clip.id)
     setCharacterContextMenu(null)
+    setSamplingContextMenu(null)
     setClipContextMenu({
       characterId,
       clipId: clip.id,
@@ -222,6 +247,7 @@ function App() {
     event.preventDefault()
     selectCharacter(character.id)
     setClipContextMenu(null)
+    setSamplingContextMenu(null)
     setCharacterContextMenu({
       characterId: character.id,
       characterName: character.name,
@@ -229,6 +255,20 @@ function App() {
       y: event.clientY,
     })
   }, [selectCharacter])
+
+  const openSamplingContextMenu = useCallback((event: React.MouseEvent, characterId: string, sampling: SamplingQueryResponse) => {
+    event.preventDefault()
+    selectSampling(characterId, sampling.id)
+    setClipContextMenu(null)
+    setCharacterContextMenu(null)
+    setSamplingContextMenu({
+      characterId,
+      samplingId: sampling.id,
+      samplingName: sampling.name,
+      x: event.clientX,
+      y: event.clientY,
+    })
+  }, [selectSampling])
 
   useEffect(() => {
     if (!isTimelinePlaying || !selectedClip || maxTimelineFrame <= 0) {
@@ -293,13 +333,14 @@ function App() {
   }, [maxTimelineFrame, selectedClip, stepTimeline])
 
   useEffect(() => {
-    if (!clipContextMenu && !characterContextMenu) {
+    if (!clipContextMenu && !characterContextMenu && !samplingContextMenu) {
       return
     }
 
     const closeMenu = () => {
       setClipContextMenu(null)
       setCharacterContextMenu(null)
+      setSamplingContextMenu(null)
     }
     const closeMenuOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -315,7 +356,7 @@ function App() {
       window.removeEventListener('resize', closeMenu)
       window.removeEventListener('keydown', closeMenuOnEscape)
     }
-  }, [characterContextMenu, clipContextMenu])
+  }, [characterContextMenu, clipContextMenu, samplingContextMenu])
 
   useEffect(() => {
     let cancelled = false
@@ -507,6 +548,115 @@ function App() {
       appendLog(`Deleted ${character.name}`)
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Character delete failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function handleCreateSampling(character: CharacterResponse) {
+    const name = window.prompt('Sampling name', `Sampling ${character.samplings.length + 1}`)
+    if (name === null) {
+      return
+    }
+
+    setIsBusy(true)
+    appendLog(`Creating sampling ${name.trim() || 'Sampling'}`)
+    try {
+      const updatedCharacter = await createSamplingQuery(character.id, name)
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((item) =>
+              item.id === updatedCharacter.id ? updatedCharacter : item,
+            ),
+          }
+        : currentWorkspace)
+      const createdSampling = updatedCharacter.samplings.at(-1)
+      if (createdSampling) {
+        selectSampling(updatedCharacter.id, createdSampling.id)
+        appendLog(`Created sampling ${createdSampling.name}`)
+      }
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Sampling create failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function handleRenameSampling(characterId: string, samplingId: string) {
+    const character = workspace?.characters.find((item) => item.id === characterId)
+    const sampling = character?.samplings.find((item) => item.id === samplingId)
+    if (!character || !sampling) {
+      setSamplingContextMenu(null)
+      appendLog('Sampling was not found', 'warning')
+      return
+    }
+
+    const name = window.prompt('Sampling name', sampling.name)
+    setSamplingContextMenu(null)
+    if (name === null) {
+      return
+    }
+
+    setIsBusy(true)
+    appendLog(`Renaming sampling ${sampling.name}`)
+    try {
+      const updatedCharacter = await updateSamplingQuery(characterId, samplingId, name)
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((item) =>
+              item.id === updatedCharacter.id ? updatedCharacter : item,
+            ),
+          }
+        : currentWorkspace)
+      const updatedSampling = updatedCharacter.samplings.find((item) => item.id === samplingId)
+      if (updatedSampling) {
+        selectSampling(updatedCharacter.id, updatedSampling.id)
+        appendLog(`Renamed sampling to ${updatedSampling.name}`)
+      }
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Sampling rename failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function handleDeleteSampling(characterId: string, samplingId: string) {
+    const character = workspace?.characters.find((item) => item.id === characterId)
+    const sampling = character?.samplings.find((item) => item.id === samplingId)
+    if (!character || !sampling) {
+      setSamplingContextMenu(null)
+      appendLog('Sampling was not found', 'warning')
+      return
+    }
+
+    if (!window.confirm(`Delete sampling "${sampling.name}"?`)) {
+      setSamplingContextMenu(null)
+      return
+    }
+
+    setIsBusy(true)
+    setSamplingContextMenu(null)
+    appendLog(`Deleting sampling ${sampling.name}`)
+    try {
+      const updatedCharacter = await deleteSamplingQuery(characterId, samplingId)
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((item) =>
+              item.id === updatedCharacter.id ? updatedCharacter : item,
+            ),
+          }
+        : currentWorkspace)
+
+      if (selection?.type === 'sampling' && selection.samplingId === samplingId) {
+        selectCharacter(updatedCharacter.id)
+        setCharacterInspectorTab('sampling')
+      }
+      appendLog(`Deleted sampling ${sampling.name}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Sampling delete failed', 'error')
     } finally {
       setIsBusy(false)
     }
@@ -858,18 +1008,50 @@ function App() {
                   {validationIcon(character)}
                   <span>{character.name}</span>
                 </button>
-                {(character.clips ?? []).map((clip) => (
-                  <button
-                    key={clip.id}
-                    type="button"
-                    className={`tree-item tree-item-clip ${selection?.type === 'clip' && clip.id === selection.clipId ? 'selected' : ''}`}
-                    onClick={() => selectClip(character.id, clip.id)}
-                    onContextMenu={(event) => openClipContextMenu(event, character.id, clip)}
-                  >
-                    {clipValidationIcon(clip)}
-                    <span>{clip.name}</span>
-                  </button>
-                ))}
+                <div className="tree-folder">
+                  <div className="tree-folder-label">
+                    <span>Clips</span>
+                    <span>{character.clips?.length ?? 0}</span>
+                  </div>
+                  {(character.clips ?? []).map((clip) => (
+                    <button
+                      key={clip.id}
+                      type="button"
+                      className={`tree-item tree-item-child ${selection?.type === 'clip' && clip.id === selection.clipId ? 'selected' : ''}`}
+                      onClick={() => selectClip(character.id, clip.id)}
+                      onContextMenu={(event) => openClipContextMenu(event, character.id, clip)}
+                    >
+                      {clipValidationIcon(clip)}
+                      <span>{clip.name}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="tree-folder">
+                  <div className="tree-folder-label">
+                    <span>Samplings</span>
+                    <button
+                      type="button"
+                      className="tree-folder-add"
+                      disabled={isBusy}
+                      onClick={() => handleCreateSampling(character)}
+                      aria-label={`Add sampling for ${character.name}`}
+                    >
+                      +
+                    </button>
+                  </div>
+                  {character.samplings.map((sampling) => (
+                    <button
+                      key={`${character.id}-${sampling.id}`}
+                      type="button"
+                      className={`tree-item tree-item-child tree-item-sampling ${selection?.type === 'sampling' && selection.characterId === character.id && selection.samplingId === sampling.id ? 'selected' : ''}`}
+                      onClick={() => selectSampling(character.id, sampling.id)}
+                      onContextMenu={(event) => openSamplingContextMenu(event, character.id, sampling)}
+                    >
+                      <FileText size={14} aria-hidden="true" />
+                      <span>{sampling.name}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
@@ -917,6 +1099,7 @@ function App() {
             isBusy={isBusy}
             lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
             lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
+            selectedSampling={selectedSampling}
             runtimeSampleFrameStep={selectedCharacter.runtimeBuildSettings.sampleFrameStep}
             runtimeScaleMode={selectedCharacter.runtimeBuildSettings.scaleMode}
             activeTab={characterInspectorTab}
@@ -1014,6 +1197,36 @@ function App() {
           >
             <Trash2 size={14} aria-hidden="true" />
             Delete Character
+          </button>
+        </div>
+      ) : null}
+      {samplingContextMenu ? (
+        <div
+          className="context-menu"
+          style={{ left: samplingContextMenu.x, top: samplingContextMenu.y }}
+          role="menu"
+          aria-label={`Sampling actions for ${samplingContextMenu.samplingName}`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="context-menu-item"
+            role="menuitem"
+            disabled={isBusy}
+            onClick={() => handleRenameSampling(samplingContextMenu.characterId, samplingContextMenu.samplingId)}
+          >
+            <FileText size={14} aria-hidden="true" />
+            Rename
+          </button>
+          <button
+            type="button"
+            className="context-menu-item danger"
+            role="menuitem"
+            disabled={isBusy}
+            onClick={() => handleDeleteSampling(samplingContextMenu.characterId, samplingContextMenu.samplingId)}
+          >
+            <Trash2 size={14} aria-hidden="true" />
+            Delete Sampling
           </button>
         </div>
       ) : null}
@@ -2624,6 +2837,7 @@ function CharacterInspector({
   hasRuntimeDraft,
   lastBuildReport,
   lastRuntimeDraft,
+  selectedSampling,
   runtimeSampleFrameStep,
   runtimeScaleMode,
   activeTab,
@@ -2646,6 +2860,7 @@ function CharacterInspector({
   hasRuntimeDraft: boolean
   lastBuildReport: BuildReportResponse | null
   lastRuntimeDraft: RuntimeBuildDraftResponse | null
+  selectedSampling: SamplingQueryResponse | null
   runtimeSampleFrameStep: number
   runtimeScaleMode: RuntimeScaleMode
   activeTab: CharacterInspectorTab
@@ -2759,7 +2974,7 @@ function CharacterInspector({
             </button>
           </>
         ) : (
-          <SamplingInspector character={character} runtimeDraft={lastRuntimeDraft} />
+          <SamplingInspector character={character} sampling={selectedSampling ?? character.samplings[0] ?? null} runtimeDraft={lastRuntimeDraft} />
         )}
       </section>
       {activeTab === 'overview' ? (
@@ -2794,9 +3009,11 @@ function CharacterInspector({
 
 function SamplingInspector({
   character,
+  sampling,
   runtimeDraft,
 }: {
   character: CharacterResponse
+  sampling: SamplingQueryResponse | null
   runtimeDraft: RuntimeBuildDraftResponse | null
 }) {
   const runtimeScale = runtimeDraft
@@ -2808,20 +3025,22 @@ function SamplingInspector({
       <dl>
         <dt>Character</dt>
         <dd>{character.name}</dd>
+        <dt>Sampling</dt>
+        <dd>{sampling?.name ?? 'None'}</dd>
         <dt>Capsule</dt>
-        <dd>Height 72, radius 14</dd>
+        <dd>{sampling ? `Height ${formatNumber(sampling.capsule.height)}, radius ${formatNumber(sampling.capsule.radius)}` : '--'}</dd>
         <dt>Facing</dt>
-        <dd>+Z</dd>
+        <dd>{sampling ? formatVector(sampling.facing) : '--'}</dd>
         <dt>Trajectory</dt>
-        <dd>20 / 40 / 60 frames</dd>
+        <dd>{sampling ? sampling.trajectory.map((point) => point.frameOffset).join(' / ') : '--'}</dd>
         <dt>Scale</dt>
         <dd>{runtimeScale}</dd>
       </dl>
       <div className="sampling-query-grid">
         <span>Position 0, 0, 0</span>
-        <span>Velocity 0, 0, 1</span>
-        <span>Face +Z</span>
-        <span>Mode preview</span>
+        <span>{`Velocity ${sampling ? formatVector(sampling.velocity) : '--'}`}</span>
+        <span>{`Face ${sampling ? formatVector(sampling.facing) : '--'}`}</span>
+        <span>{sampling ? `${sampling.trajectory.length} points` : 'No sampling'}</span>
       </div>
       <button type="button" className="inspector-action" disabled title="Matcher is the next slice">
         <FileText size={14} aria-hidden="true" />

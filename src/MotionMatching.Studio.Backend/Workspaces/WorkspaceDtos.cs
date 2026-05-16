@@ -12,6 +12,7 @@ public sealed record CharacterResponse(
     string ManifestPath,
     string VisualManifestPath,
     IReadOnlyList<ClipResponse> Clips,
+    IReadOnlyList<SamplingQueryResponse> Samplings,
     string? PreviewUrl,
     ValidationResponse? Validation,
     BuildReadinessResponse BuildReadiness,
@@ -21,6 +22,23 @@ public sealed record CharacterResponse(
     string RuntimeBuildDraftStatus,
     RuntimeBuildSettingsResponse RuntimeBuildSettings,
     IReadOnlyList<ImportLogEntryResponse> ImportLog);
+
+public sealed record SamplingQueryResponse(
+    string Id,
+    string Name,
+    SamplingCapsuleResponse Capsule,
+    IReadOnlyList<double> Facing,
+    IReadOnlyList<double> Velocity,
+    IReadOnlyList<SamplingTrajectoryPointResponse> Trajectory);
+
+public sealed record SamplingCapsuleResponse(
+    double Height,
+    double Radius);
+
+public sealed record SamplingTrajectoryPointResponse(
+    int FrameOffset,
+    IReadOnlyList<double> Position,
+    IReadOnlyList<double> Direction);
 
 public sealed record ClipResponse(
     string Id,
@@ -316,6 +334,12 @@ public sealed record ClipSettingsRequest(
     string? ClipRole,
     string? ContactDetectionPreset,
     IReadOnlyList<string> Tags);
+
+public sealed record SamplingQueryCreateRequest(
+    string? Name);
+
+public sealed record SamplingQueryUpdateRequest(
+    string? Name);
 
 public sealed record RuntimeBuildSettingsRequest(
     int SampleFrameStep,

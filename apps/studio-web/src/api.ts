@@ -13,6 +13,7 @@ export interface CharacterResponse {
   manifestPath: string
   visualManifestPath: string
   clips: ClipResponse[]
+  samplings: SamplingQueryResponse[]
   previewUrl: string | null
   validation: ValidationResponse | null
   buildReadiness: BuildReadinessResponse
@@ -22,6 +23,26 @@ export interface CharacterResponse {
   runtimeBuildDraftStatus: BuildReportStatus
   runtimeBuildSettings: RuntimeBuildSettingsResponse
   importLog: ImportLogEntryResponse[]
+}
+
+export interface SamplingQueryResponse {
+  id: string
+  name: string
+  capsule: SamplingCapsuleResponse
+  facing: number[]
+  velocity: number[]
+  trajectory: SamplingTrajectoryPointResponse[]
+}
+
+export interface SamplingCapsuleResponse {
+  height: number
+  radius: number
+}
+
+export interface SamplingTrajectoryPointResponse {
+  frameOffset: number
+  position: number[]
+  direction: number[]
 }
 
 export interface ClipResponse {
@@ -428,6 +449,62 @@ export async function uploadClip(characterId: string, file: File): Promise<Chara
 
   if (!response.ok) {
     throw new Error(`Clip import failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function createSamplingQuery(characterId: string, name: string): Promise<CharacterResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/samplings`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name }),
+  })
+
+  if (response.status === 404) {
+    throw new Error('Character was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Sampling create failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function updateSamplingQuery(characterId: string, samplingId: string, name: string): Promise<CharacterResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/samplings/${samplingId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name }),
+  })
+
+  if (response.status === 404) {
+    throw new Error('Sampling was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Sampling update failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function deleteSamplingQuery(characterId: string, samplingId: string): Promise<CharacterResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/samplings/${samplingId}`, {
+    method: 'DELETE',
+  })
+
+  if (response.status === 404) {
+    throw new Error('Sampling was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Sampling delete failed: ${response.status}`)
   }
 
   return response.json()

@@ -143,6 +143,58 @@ app.MapDelete("/api/v1/workspaces/browser/characters/{characterId}", async (
     }
 });
 
+app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/samplings", async (
+    string characterId,
+    SamplingQueryCreateRequest request,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.CreateSamplingQueryAsync(characterId, request, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "character_not_found", message = exception.Message });
+    }
+});
+
+app.MapPatch("/api/v1/workspaces/browser/characters/{characterId}/samplings/{samplingId}", async (
+    string characterId,
+    string samplingId,
+    SamplingQueryUpdateRequest request,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.UpdateSamplingQueryAsync(characterId, samplingId, request, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "sampling_not_found", message = exception.Message });
+    }
+});
+
+app.MapDelete("/api/v1/workspaces/browser/characters/{characterId}/samplings/{samplingId}", async (
+    string characterId,
+    string samplingId,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.DeleteSamplingQueryAsync(characterId, samplingId, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "sampling_not_found", message = exception.Message });
+    }
+});
+
 app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/build-report", async (
     string characterId,
     BrowserWorkspaceService workspaceService,
