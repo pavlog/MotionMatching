@@ -155,6 +155,7 @@ public sealed record RuntimeBuildDraftResponse(
     RuntimeSkeletonDraftResponse Skeleton,
     RuntimePoseDraftResponse Poses,
     RuntimeFeatureDraftResponse Features,
+    RuntimeDatabaseDraftResponse Database,
     BuildReadinessResponse BuildReadiness);
 
 public sealed record RuntimeBuildArtifactResponse(
@@ -235,6 +236,37 @@ public sealed record RuntimeFeatureSamplePreviewResponse(
     int Frame,
     double Seconds,
     IReadOnlyDictionary<string, double?> Values);
+
+public sealed record RuntimeDatabaseDraftResponse(
+    string Status,
+    string SchemaVersion,
+    int ClipCount,
+    int SampleCount,
+    int FeatureCount,
+    RuntimeFeatureScaleResponse Scale,
+    IReadOnlyList<RuntimeDatabaseClipResponse> Clips,
+    IReadOnlyList<RuntimeDatabaseSamplePreviewResponse> SamplePreviews,
+    IReadOnlyList<BuildReadinessFindingResponse> Findings);
+
+public sealed record RuntimeDatabaseClipResponse(
+    string ClipId,
+    string ClipName,
+    string? ClipRole,
+    bool IsMirrored,
+    int PlannedSampleCount,
+    IReadOnlyList<RuntimeDatabaseContactTrackResponse> FootContacts);
+
+public sealed record RuntimeDatabaseContactTrackResponse(
+    string Foot,
+    IReadOnlyList<FootContactRangeResponse> Ranges);
+
+public sealed record RuntimeDatabaseSamplePreviewResponse(
+    string ClipId,
+    string ClipName,
+    bool IsMirrored,
+    int Frame,
+    double Seconds,
+    IReadOnlyDictionary<string, double?> Features);
 
 public sealed record ImportLogEntryResponse(
     string Level,

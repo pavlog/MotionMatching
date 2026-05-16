@@ -497,6 +497,7 @@ public sealed class BrowserWorkspaceService
         var character = await ToCharacterResponseAsync(reference, cancellationToken);
         var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips, normalizedSampleFrameStep);
         var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft, character.Clips, normalizedScaleMode);
+        var databaseDraft = BuildRuntimeDatabaseDraft(poseDraft, featureDraft, character.Clips);
         var draft = new RuntimeBuildDraftResponse(
             report.CharacterId,
             report.CharacterName,
@@ -508,11 +509,13 @@ public sealed class BrowserWorkspaceService
             [
                 new RuntimeBuildArtifactResponse($"{characterFolderName}.mmskeleton", "skeleton", skeletonDraft.Status == "error" ? "blocked" : "draft"),
                 new RuntimeBuildArtifactResponse($"{characterFolderName}.mmpose", "poses", poseDraft.Status == "error" ? "blocked" : "draft"),
-                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmfeatures", "features", featureDraft.Status == "error" ? "blocked" : "draft")
+                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmfeatures", "features", featureDraft.Status == "error" ? "blocked" : "draft"),
+                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmdatabase", "database", databaseDraft.Status == "error" ? "blocked" : "draft")
             ],
             skeletonDraft,
             poseDraft,
             featureDraft,
+            databaseDraft,
             report.BuildReadiness);
 
         await WriteManifestAsync(
@@ -526,6 +529,10 @@ public sealed class BrowserWorkspaceService
         await WriteManifestAsync(
             Path.Combine(GetWorkspaceRoot(), GetRuntimeFeatureDraftPath(reference).Replace('/', Path.DirectorySeparatorChar)),
             featureDraft,
+            cancellationToken);
+        await WriteManifestAsync(
+            Path.Combine(GetWorkspaceRoot(), GetRuntimeDatabaseDraftPath(reference).Replace('/', Path.DirectorySeparatorChar)),
+            databaseDraft,
             cancellationToken);
         await WriteManifestAsync(
             Path.Combine(GetWorkspaceRoot(), draftPath.Replace('/', Path.DirectorySeparatorChar)),
@@ -1174,6 +1181,88 @@ public sealed class BrowserWorkspaceService
             featureClips,
             samplePreviews,
             findings);
+    }
+
+    private static RuntimeDatabaseDraftResponse BuildRuntimeDatabaseDraft(
+        RuntimePoseDraftResponse poseDraft,
+        RuntimeFeatureDraftResponse featureDraft,
+        IReadOnlyList<ClipResponse> clips)
+    {
+        var clipsById = clips.ToDictionary(clip => clip.Id, StringComparer.Ordinal);
+        var databaseClips = poseDraft.Clips
+            .Select(clip =>
+            {
+                clipsById.TryGetValue(clip.ClipId, out var sourceClip);
+                var footContacts = sourceClip?.FootContacts?.Tracks
+                    .Select(track => new RuntimeDatabaseContactTrackResponse(
+                        clip.IsMirrored ? MirrorFootName(track.Foot) : track.Foot,
+                        track.Ranges))
+                    .ToArray() ?? Array.Empty<RuntimeDatabaseContactTrackResponse>();
+
+                return new RuntimeDatabaseClipResponse(
+                    clip.ClipId,
+                    clip.ClipName,
+                    clip.ClipRole,
+                    clip.IsMirrored,
+                    clip.PlannedSampleCount,
+                    footContacts);
+            })
+            .ToArray();
+        var samplePreviews = featureDraft.SamplePreviews
+            .Select(sample => new RuntimeDatabaseSamplePreviewResponse(
+                sample.ClipId,
+                sample.ClipName,
+                sample.IsMirrored,
+                sample.Frame,
+                sample.Seconds,
+                sample.Values))
+            .ToArray();
+        var findings = new List<BuildReadinessFindingResponse>();
+        if (poseDraft.Status == "error" || featureDraft.Status == "error")
+        {
+            findings.Add(BuildFinding(
+                "error",
+                "runtime_database_inputs_blocked",
+                "Runtime database draft cannot be trusted while pose or feature drafts have errors.",
+                null));
+        }
+
+        foreach (var clip in databaseClips.Where(clip => clip.FootContacts.Count == 0))
+        {
+            findings.Add(new BuildReadinessFindingResponse(
+                "warning",
+                "runtime_database_contacts_missing",
+                $"{clip.ClipName} has no foot contact tracks in the database draft.",
+                clip.ClipId,
+                clip.ClipName));
+        }
+
+        var status = findings.Any(finding => finding.Severity == "error")
+            ? "error"
+            : findings.Any(finding => finding.Severity == "warning") || poseDraft.Status == "warning" || featureDraft.Status == "warning"
+                ? "warning"
+                : "ok";
+
+        return new RuntimeDatabaseDraftResponse(
+            status,
+            "motionstudio.runtime-database-draft.v0",
+            databaseClips.Length,
+            poseDraft.PlannedPoseSampleCount,
+            featureDraft.FeatureCount,
+            featureDraft.Scale,
+            databaseClips,
+            samplePreviews,
+            findings);
+    }
+
+    private static string MirrorFootName(string foot)
+    {
+        return foot.ToLowerInvariant() switch
+        {
+            "left" => "right",
+            "right" => "left",
+            _ => foot
+        };
     }
 
     private static RuntimeFeatureScaleResponse BuildRuntimeFeatureScale(IReadOnlyList<ClipResponse> clips, string mode)
@@ -2127,6 +2216,12 @@ public sealed class BrowserWorkspaceService
     {
         var characterFolderName = GetCharacterFolderName(reference);
         return ToPortablePath("Builds", characterFolderName, $"{characterFolderName}.mmfeatures");
+    }
+
+    private static string GetRuntimeDatabaseDraftPath(CharacterReference reference)
+    {
+        var characterFolderName = GetCharacterFolderName(reference);
+        return ToPortablePath("Builds", characterFolderName, $"{characterFolderName}.mmdatabase");
     }
 
     private static string ToAssetUrl(params string[] parts)

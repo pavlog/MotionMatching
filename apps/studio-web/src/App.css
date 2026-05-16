@@ -1069,6 +1069,28 @@
   font: inherit;
 }
 
+.settings-save-state {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 20px;
+  align-items: center;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.settings-save-state.saved {
+  color: #8bd8a6;
+}
+
+.settings-save-state.failed {
+  color: #ff8a8a;
+}
+
+.settings-save-state.saving {
+  color: #f2b753;
+}
+
 .tag-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

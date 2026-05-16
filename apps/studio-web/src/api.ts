@@ -172,6 +172,7 @@ export interface RuntimeBuildDraftResponse {
   skeleton: RuntimeSkeletonDraftResponse
   poses: RuntimePoseDraftResponse
   features: RuntimeFeatureDraftResponse
+  database: RuntimeDatabaseDraftResponse
   buildReadiness: BuildReadinessResponse
 }
 
@@ -270,6 +271,41 @@ export interface RuntimeFeatureSamplePreviewResponse {
   frame: number
   seconds: number
   values: Record<string, number | null>
+}
+
+export interface RuntimeDatabaseDraftResponse {
+  status: 'ok' | 'warning' | 'error'
+  schemaVersion: string
+  clipCount: number
+  sampleCount: number
+  featureCount: number
+  scale: RuntimeFeatureScaleResponse
+  clips: RuntimeDatabaseClipResponse[]
+  samplePreviews: RuntimeDatabaseSamplePreviewResponse[]
+  findings: BuildReadinessFindingResponse[]
+}
+
+export interface RuntimeDatabaseClipResponse {
+  clipId: string
+  clipName: string
+  clipRole: string | null
+  isMirrored: boolean
+  plannedSampleCount: number
+  footContacts: RuntimeDatabaseContactTrackResponse[]
+}
+
+export interface RuntimeDatabaseContactTrackResponse {
+  foot: string
+  ranges: FootContactRangeResponse[]
+}
+
+export interface RuntimeDatabaseSamplePreviewResponse {
+  clipId: string
+  clipName: string
+  isMirrored: boolean
+  frame: number
+  seconds: number
+  features: Record<string, number | null>
 }
 
 export type BuildReportStatus = 'none' | 'current' | 'outdated'

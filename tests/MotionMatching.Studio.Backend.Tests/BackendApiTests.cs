@@ -462,8 +462,11 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"boneNames\":[\"Hips\",\"Spine\",\"Head\",\"LeftUpLeg\",\"RightUpLeg\"]", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmpose\"", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmfeatures\"", draftJson);
+        Assert.Contains("\"fileName\":\"IyoMixamo.mmdatabase\"", draftJson);
         Assert.Contains("\"plannedPoseSampleCount\":21", draftJson);
         Assert.Contains("\"featureCount\":7", draftJson);
+        Assert.Contains("\"schemaVersion\":\"motionstudio.runtime-database-draft.v0\"", draftJson);
+        Assert.Contains("\"sampleCount\":21", draftJson);
         Assert.Contains("\"name\":\"trajectory_position\"", draftJson);
         Assert.Contains("\"scale\"", draftJson);
         Assert.Contains("\"mode\":\"source_x0_01\"", draftJson);
@@ -474,10 +477,12 @@ public sealed class BackendApiTests : IAsyncLifetime
         var skeletonPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmskeleton");
         var posePath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmpose");
         var featurePath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmfeatures");
+        var databasePath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmdatabase");
         Assert.True(File.Exists(draftPath));
         Assert.True(File.Exists(skeletonPath));
         Assert.True(File.Exists(posePath));
         Assert.True(File.Exists(featurePath));
+        Assert.True(File.Exists(databasePath));
 
         var persistedDraftJson = await File.ReadAllTextAsync(draftPath);
         Assert.Contains("\"trajectory_position[20,40,60]:simulation_bone\"", persistedDraftJson);
@@ -504,6 +509,12 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"trajectory_direction_60\"", persistedFeatureJson);
         Assert.DoesNotContain(_workspaceRoot, persistedFeatureJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedFeatureJson);
+        var persistedDatabaseJson = await File.ReadAllTextAsync(databasePath);
+        Assert.Contains("\"schemaVersion\": \"motionstudio.runtime-database-draft.v0\"", persistedDatabaseJson);
+        Assert.Contains("\"clipName\": \"RunForward\"", persistedDatabaseJson);
+        Assert.Contains("\"features\": {", persistedDatabaseJson);
+        Assert.DoesNotContain(_workspaceRoot, persistedDatabaseJson);
+        Assert.DoesNotContain(Path.GetTempPath(), persistedDatabaseJson);
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "build-report.json")));
 
         var workspaceResponse = await client.GetAsync("/api/v1/workspaces/browser");

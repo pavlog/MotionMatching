@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Box as BoxIcon, CheckCircle2, CirclePlus, FileText, Film, ListTree, Loader2, Pause, Play, RefreshCw, StepBack, StepForward, TerminalSquare, Trash2, TriangleAlert, X } from 'lucide-react'
+import { AlertCircle, Box as BoxIcon, CheckCircle2, CirclePlus, Copy, FileText, Film, ListTree, Loader2, Pause, Play, RefreshCw, StepBack, StepForward, TerminalSquare, Trash2, TriangleAlert, X } from 'lucide-react'
 import {
   type ClipResponse,
   type BuildReportResponse,
@@ -115,6 +115,7 @@ function App() {
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
   const [lastRuntimeDraft, setLastRuntimeDraft] = useState<RuntimeBuildDraftResponse | null>(null)
   const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
+  const [runtimeSettingsSaveState, setRuntimeSettingsSaveState] = useState<{ characterId: string; state: 'saving' | 'saved' | 'failed' } | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([
     { id: 1, level: 'info', message: 'Ready' },
   ])
@@ -135,6 +136,10 @@ function App() {
   const visibleLoopEndFrame = Math.max(visibleLoopStartFrame, loopEndFrame >= 0 ? Math.min(loopEndFrame, maxTimelineFrame) : maxTimelineFrame)
   const hasClipTimelineMetadata = Boolean(selectedClip?.frameCount && selectedClip.frameRate && selectedClip.durationSeconds)
   const latestLog = logs.at(-1)
+  const selectedRuntimeSettingsSaveState = runtimeSettingsSaveState
+  const visibleRuntimeSettingsSaveState = selectedRuntimeSettingsSaveState && selectedRuntimeSettingsSaveState.characterId === selectedCharacter?.id
+    ? selectedRuntimeSettingsSaveState.state
+    : 'idle'
 
   useEffect(() => {
     timelineFrameRef.current = visibleTimelineFrame
@@ -542,6 +547,7 @@ function App() {
     }
 
     try {
+      setRuntimeSettingsSaveState({ characterId: selectedCharacter.id, state: 'saving' })
       const updatedCharacter = await updateRuntimeBuildSettings(selectedCharacter.id, nextSettings)
       setWorkspace((currentWorkspace) => currentWorkspace
         ? {
@@ -551,8 +557,9 @@ function App() {
             ),
           }
         : currentWorkspace)
-      appendLog(`Updated runtime build settings for ${selectedCharacter.name}`)
+      setRuntimeSettingsSaveState({ characterId: selectedCharacter.id, state: 'saved' })
     } catch (error) {
+      setRuntimeSettingsSaveState({ characterId: selectedCharacter.id, state: 'failed' })
       appendLog(error instanceof Error ? error.message : 'Runtime build settings update failed', 'error')
     }
   }
@@ -844,6 +851,7 @@ function App() {
             lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
             runtimeSampleFrameStep={selectedCharacter.runtimeBuildSettings.sampleFrameStep}
             runtimeScaleMode={selectedCharacter.runtimeBuildSettings.scaleMode}
+            runtimeSettingsSaveState={visibleRuntimeSettingsSaveState}
             hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
             hasRuntimeDraft={Boolean((lastRuntimeDraft?.characterId === selectedCharacter.id && lastRuntimeDraft) || selectedCharacter.runtimeBuildDraftPath)}
             onGenerateBuildReport={() => handleGenerateBuildReport(selectedCharacter)}
@@ -1020,6 +1028,16 @@ function BuildReportView({
   const presentRoles = readiness.roles.filter((role) => role.includedClipCount > 0)
   const missingRoles = readiness.roles.filter((role) => role.isRequired && role.includedClipCount === 0)
   const changes = currentReadiness ? describeReadinessChanges(readiness, currentReadiness) : []
+  const [pathCopyState, setPathCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+
+  async function copyBuildReportPaths() {
+    try {
+      await navigator.clipboard.writeText(buildReportPathsText(report))
+      setPathCopyState('copied')
+    } catch {
+      setPathCopyState('failed')
+    }
+  }
 
   return (
     <div className="report-view">
@@ -1041,6 +1059,10 @@ function BuildReportView({
           <dt>Errors</dt>
           <dd>{readiness.errorCount}</dd>
         </dl>
+        <button type="button" className="inspector-action" onClick={copyBuildReportPaths}>
+          <Copy size={14} aria-hidden="true" />
+          {pathCopyState === 'copied' ? 'Copied Paths' : pathCopyState === 'failed' ? 'Copy Failed' : 'Copy Paths'}
+        </button>
       </section>
       {changes.length ? (
         <section className="report-section">
@@ -1125,6 +1147,7 @@ function RuntimeDraftView({
   const readiness = draft.buildReadiness
   const changes = currentReadiness ? describeReadinessChanges(readiness, currentReadiness) : []
   const [contractCopyState, setContractCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [pathCopyState, setPathCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
 
   async function copyEngineQueryContract() {
     try {
@@ -1132,6 +1155,15 @@ function RuntimeDraftView({
       setContractCopyState('copied')
     } catch {
       setContractCopyState('failed')
+    }
+  }
+
+  async function copyRuntimeDraftPaths() {
+    try {
+      await navigator.clipboard.writeText(runtimeDraftPathsText(draft))
+      setPathCopyState('copied')
+    } catch {
+      setPathCopyState('failed')
     }
   }
 
@@ -1164,6 +1196,10 @@ function RuntimeDraftView({
         <button type="button" className="inspector-action" onClick={copyEngineQueryContract}>
           <FileText size={14} aria-hidden="true" />
           {contractCopyState === 'copied' ? 'Copied Query Contract' : contractCopyState === 'failed' ? 'Copy Failed' : 'Copy Query Contract'}
+        </button>
+        <button type="button" className="inspector-action" onClick={copyRuntimeDraftPaths}>
+          <Copy size={14} aria-hidden="true" />
+          {pathCopyState === 'copied' ? 'Copied Paths' : pathCopyState === 'failed' ? 'Copy Failed' : 'Copy Paths'}
         </button>
       </section>
       {changes.length ? (
@@ -1233,6 +1269,30 @@ function RuntimeDraftView({
               <span>{`${clip.plannedSampleCount} samples x ${draft.features.featureCount} channels`}</span>
             </div>
           )) : <p>No feature samples planned</p>}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Database Draft</h3>
+        <dl className="report-summary-grid">
+          <dt>Status</dt>
+          <dd>{draft.database.status}</dd>
+          <dt>Schema</dt>
+          <dd>{draft.database.schemaVersion}</dd>
+          <dt>Clips</dt>
+          <dd>{draft.database.clipCount}</dd>
+          <dt>Samples</dt>
+          <dd>{draft.database.sampleCount}</dd>
+          <dt>Features</dt>
+          <dd>{draft.database.featureCount}</dd>
+        </dl>
+        <div className="report-table">
+          {draft.database.clips.length ? draft.database.clips.map((clip) => (
+            <div key={`${clip.clipId}-${clip.isMirrored ? 'mirror' : 'source'}-database`} className={`report-row ${clip.footContacts.length ? 'ok' : 'warning'}`}>
+              <span>{clip.clipName}</span>
+              <span>{clip.isMirrored ? 'Mirrored' : 'Source'}</span>
+              <span>{`${clip.plannedSampleCount} samples, ${clip.footContacts.length} contact tracks`}</span>
+            </div>
+          )) : <p>No database clips planned</p>}
         </div>
       </section>
       <section className="report-section">
@@ -1925,10 +1985,28 @@ function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
     plannedSamples: {
       poseSamples: draft.poses.plannedPoseSampleCount,
       featureSamples: draft.features.plannedSampleCount,
+      databaseSamples: draft.database.sampleCount,
     },
   }
 
   return JSON.stringify(contract, null, 2)
+}
+
+function buildReportPathsText(report: BuildReportResponse) {
+  return [
+    `Build report: ${report.reportPath}`,
+  ].join('\n')
+}
+
+function runtimeDraftPathsText(draft: RuntimeBuildDraftResponse) {
+  const buildFolder = draft.draftPath.split('/').slice(0, -1).join('/')
+  const artifactPaths = draft.artifacts.map((artifact) => `${artifact.kind}: ${buildFolder}/${artifact.fileName}`)
+
+  return [
+    `Runtime draft: ${draft.draftPath}`,
+    `Source report: ${draft.sourceReportPath}`,
+    ...artifactPaths,
+  ].join('\n')
 }
 
 function formatRuntimeScaleMode(mode: RuntimeScaleMode) {
@@ -1942,6 +2020,22 @@ function formatRuntimeScaleSummary(draft: RuntimeBuildDraftResponse | null) {
 
   const scale = draft.features.scale
   return `${formatRuntimeScaleMode(scale.mode)} x${formatNumber(scale.normalizationFactor)}`
+}
+
+function formatRuntimeSettingsSaveState(state: 'idle' | 'saving' | 'saved' | 'failed') {
+  if (state === 'saving') {
+    return 'Saving settings'
+  }
+
+  if (state === 'saved') {
+    return 'Settings saved'
+  }
+
+  if (state === 'failed') {
+    return 'Settings failed'
+  }
+
+  return 'Settings stored in character'
 }
 
 function formatBuildReportStatus(status: CharacterResponse['buildReportStatus']) {
@@ -2160,6 +2254,7 @@ function CharacterInspector({
   lastRuntimeDraft,
   runtimeSampleFrameStep,
   runtimeScaleMode,
+  runtimeSettingsSaveState,
   onGenerateBuildReport,
   onGenerateRuntimeBuildDraft,
   onViewBuildReport,
@@ -2176,6 +2271,7 @@ function CharacterInspector({
   lastRuntimeDraft: RuntimeBuildDraftResponse | null
   runtimeSampleFrameStep: number
   runtimeScaleMode: RuntimeScaleMode
+  runtimeSettingsSaveState: 'idle' | 'saving' | 'saved' | 'failed'
   onGenerateBuildReport: () => void
   onGenerateRuntimeBuildDraft: () => void
   onViewBuildReport: () => void
@@ -2230,6 +2326,9 @@ function CharacterInspector({
             ))}
           </select>
         </label>
+        <span className={`settings-save-state ${runtimeSettingsSaveState}`}>
+          {formatRuntimeSettingsSaveState(runtimeSettingsSaveState)}
+        </span>
         <button
           type="button"
           className="inspector-action"
