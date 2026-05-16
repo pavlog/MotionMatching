@@ -198,10 +198,17 @@ public sealed record RuntimeFeatureDraftResponse(
     int SampleFrameStep,
     int FeatureCount,
     int PlannedSampleCount,
+    RuntimeFeatureScaleResponse Scale,
     IReadOnlyList<RuntimeFeatureChannelResponse> Channels,
     IReadOnlyList<RuntimeFeatureClipResponse> Clips,
     IReadOnlyList<RuntimeFeatureSamplePreviewResponse> SamplePreviews,
     IReadOnlyList<BuildReadinessFindingResponse> Findings);
+
+public sealed record RuntimeFeatureScaleResponse(
+    string Status,
+    double NormalizationFactor,
+    double? MaxObservedRootSpeed,
+    IReadOnlyList<string> Warnings);
 
 public sealed record RuntimeFeatureChannelResponse(
     string Name,

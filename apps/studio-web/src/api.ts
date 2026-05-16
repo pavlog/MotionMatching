@@ -221,10 +221,18 @@ export interface RuntimeFeatureDraftResponse {
   sampleFrameStep: number
   featureCount: number
   plannedSampleCount: number
+  scale: RuntimeFeatureScaleResponse
   channels: RuntimeFeatureChannelResponse[]
   clips: RuntimeFeatureClipResponse[]
   samplePreviews: RuntimeFeatureSamplePreviewResponse[]
   findings: BuildReadinessFindingResponse[]
+}
+
+export interface RuntimeFeatureScaleResponse {
+  status: string
+  normalizationFactor: number
+  maxObservedRootSpeed: number | null
+  warnings: string[]
 }
 
 export interface RuntimeFeatureChannelResponse {

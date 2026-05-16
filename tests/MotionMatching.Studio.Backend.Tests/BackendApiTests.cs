@@ -460,6 +460,8 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"plannedPoseSampleCount\":21", draftJson);
         Assert.Contains("\"featureCount\":7", draftJson);
         Assert.Contains("\"name\":\"trajectory_position\"", draftJson);
+        Assert.Contains("\"scale\"", draftJson);
+        Assert.Contains("\"trajectory_position_20\"", draftJson);
         Assert.Contains("\"samplePreviews\"", draftJson);
 
         var draftPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "runtime-build-draft.json");
@@ -492,6 +494,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"boneSlot\": \"simulation_bone\"", persistedFeatureJson);
         Assert.Contains("\"sampleFrameStep\": 2", persistedFeatureJson);
         Assert.Contains("\"values\": {", persistedFeatureJson);
+        Assert.Contains("\"trajectory_direction_60\"", persistedFeatureJson);
         Assert.DoesNotContain(_workspaceRoot, persistedFeatureJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedFeatureJson);
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "build-report.json")));

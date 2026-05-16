@@ -1108,6 +1108,8 @@ function RuntimeDraftView({
           <dd>{`${draft.poses.status}, ${draft.poses.plannedPoseSampleCount} samples`}</dd>
           <dt>Features</dt>
           <dd>{`${draft.features.status}, ${draft.features.featureCount} channels`}</dd>
+          <dt>Scale</dt>
+          <dd>{`${draft.features.scale.status}, x${formatNumber(draft.features.scale.normalizationFactor)}`}</dd>
           <dt>Included</dt>
           <dd>{readiness.includedClipCount}</dd>
           <dt>Planned</dt>
@@ -1140,6 +1142,15 @@ function RuntimeDraftView({
       </section>
       <section className="report-section">
         <h3>Feature Preset</h3>
+        {draft.features.scale.warnings.length ? (
+          <div className="report-table">
+            {draft.features.scale.warnings.map((warning) => (
+              <div key={warning} className="report-row warning single">
+                <span>{warning}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="report-table">
           {draft.features.channels.map((channel) => (
             <div key={`${channel.name}-${channel.boneSlot ?? 'none'}`} className="report-row">
@@ -1827,8 +1838,13 @@ function formatBoneList(values: string[]) {
 
 function formatFeaturePreviewValues(values: Record<string, number | null>) {
   const visibleEntries = Object.entries(values)
-    .filter(([name, value]) => value !== null && (name === 'hips_velocity' || name.endsWith('_foot_velocity')))
-    .slice(0, 4)
+    .filter(([name, value]) => value !== null && (
+      name === 'hips_velocity' ||
+      name.endsWith('_foot_velocity') ||
+      name.startsWith('trajectory_position_') ||
+      name.startsWith('trajectory_direction_')
+    ))
+    .slice(0, 8)
 
   return visibleEntries.length
     ? visibleEntries.map(([name, value]) => `${name} ${formatNumber(value ?? Number.NaN)}`).join(', ')

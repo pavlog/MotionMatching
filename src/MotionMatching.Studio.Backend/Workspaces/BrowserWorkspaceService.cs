@@ -1080,6 +1080,7 @@ public sealed class BrowserWorkspaceService
                 clip.IsMirrored,
                 clip.PlannedSampleCount))
             .ToArray();
+        var scale = BuildRuntimeFeatureScale(clips);
         var samplePreviews = poseDraft.Clips
             .SelectMany(clip =>
             {
@@ -1088,7 +1089,8 @@ public sealed class BrowserWorkspaceService
                     clip,
                     sourceClip,
                     frame,
-                    channels));
+                    channels,
+                    scale.NormalizationFactor));
             })
             .ToArray();
         var findings = new List<BuildReadinessFindingResponse>();
@@ -1120,10 +1122,35 @@ public sealed class BrowserWorkspaceService
             poseDraft.SampleFrameStep,
             channels.Length,
             poseDraft.PlannedPoseSampleCount,
+            scale,
             channels,
             featureClips,
             samplePreviews,
             findings);
+    }
+
+    private static RuntimeFeatureScaleResponse BuildRuntimeFeatureScale(IReadOnlyList<ClipResponse> clips)
+    {
+        var maxObservedRootSpeed = clips
+            .Select(clip => clip.RootMotion?.AverageHorizontalSpeed)
+            .Where(speed => speed is > 0)
+            .DefaultIfEmpty()
+            .Max();
+        if (maxObservedRootSpeed is null)
+        {
+            return new RuntimeFeatureScaleResponse("unknown", 1, null, ["Root-motion speed diagnostics are unavailable."]);
+        }
+
+        if (maxObservedRootSpeed > 20)
+        {
+            return new RuntimeFeatureScaleResponse(
+                "source_scale_warning",
+                0.01,
+                Math.Round(maxObservedRootSpeed.Value, 4),
+                ["Root speed is unusually high for character-scale motion; preview values are normalized by 0.01."]);
+        }
+
+        return new RuntimeFeatureScaleResponse("ok", 1, Math.Round(maxObservedRootSpeed.Value, 4), []);
     }
 
     private static int CalculateSampleCount(int? frameCount, int sampleFrameStep)
@@ -1162,13 +1189,36 @@ public sealed class BrowserWorkspaceService
         RuntimePoseClipDraftResponse poseClip,
         ClipResponse? sourceClip,
         int frame,
-        IReadOnlyList<RuntimeFeatureChannelResponse> channels)
+        IReadOnlyList<RuntimeFeatureChannelResponse> channels,
+        double normalizationFactor)
     {
         var seconds = ToSampleSeconds(sourceClip, frame);
         var values = new Dictionary<string, double?>(StringComparer.Ordinal);
         foreach (var channel in channels)
         {
-            values[channel.Name] = EstimateFeatureValue(channel, sourceClip, frame, poseClip.IsMirrored);
+            if (channel.TrajectoryFrames.Count > 0)
+            {
+                foreach (var futureFrame in channel.TrajectoryFrames)
+                {
+                    values[$"{channel.Name}_{futureFrame}"] = EstimateFeatureValue(
+                        channel,
+                        sourceClip,
+                        frame,
+                        poseClip.IsMirrored,
+                        normalizationFactor,
+                        futureFrame);
+                }
+            }
+            else
+            {
+                values[channel.Name] = EstimateFeatureValue(
+                    channel,
+                    sourceClip,
+                    frame,
+                    poseClip.IsMirrored,
+                    normalizationFactor,
+                    0);
+            }
         }
 
         return new RuntimeFeatureSamplePreviewResponse(
@@ -1199,33 +1249,63 @@ public sealed class BrowserWorkspaceService
         RuntimeFeatureChannelResponse channel,
         ClipResponse? clip,
         int frame,
-        bool isMirrored)
+        bool isMirrored,
+        double normalizationFactor,
+        int futureFrameOffset)
     {
         if (clip is null)
         {
             return null;
         }
 
+        if (channel.Name.StartsWith("trajectory_", StringComparison.OrdinalIgnoreCase))
+        {
+            return EstimateTrajectoryPreview(channel, clip, isMirrored, normalizationFactor, futureFrameOffset);
+        }
+
         if (channel.Name.Equals("hips_velocity", StringComparison.OrdinalIgnoreCase))
         {
             var speed = clip.RootMotion?.AverageHorizontalSpeed;
-            return speed is null ? null : Math.Round(speed.Value, 4);
+            return speed is null ? null : Math.Round(speed.Value * normalizationFactor, 4);
         }
 
         if (channel.Name.Equals("left_foot_velocity", StringComparison.OrdinalIgnoreCase))
         {
-            return EstimateFootVelocityPreview(clip, isMirrored ? "right" : "left", frame);
+            return EstimateFootVelocityPreview(clip, isMirrored ? "right" : "left", frame, normalizationFactor);
         }
 
         if (channel.Name.Equals("right_foot_velocity", StringComparison.OrdinalIgnoreCase))
         {
-            return EstimateFootVelocityPreview(clip, isMirrored ? "left" : "right", frame);
+            return EstimateFootVelocityPreview(clip, isMirrored ? "left" : "right", frame, normalizationFactor);
         }
 
         return null;
     }
 
-    private static double? EstimateFootVelocityPreview(ClipResponse clip, string foot, int frame)
+    private static double? EstimateTrajectoryPreview(
+        RuntimeFeatureChannelResponse channel,
+        ClipResponse clip,
+        bool isMirrored,
+        double normalizationFactor,
+        int futureFrameOffset)
+    {
+        if (clip.RootMotion is null || futureFrameOffset <= 0)
+        {
+            return null;
+        }
+
+        var frameRate = clip.FrameRate is > 0 ? clip.FrameRate.Value : 30;
+        var futureSeconds = futureFrameOffset / frameRate;
+        var speed = clip.RootMotion.AverageHorizontalSpeed * normalizationFactor;
+        if (channel.Name.Equals("trajectory_direction", StringComparison.OrdinalIgnoreCase))
+        {
+            return speed <= 0.0001 ? 0 : isMirrored ? -1 : 1;
+        }
+
+        return Math.Round(speed * futureSeconds, 4);
+    }
+
+    private static double? EstimateFootVelocityPreview(ClipResponse clip, string foot, int frame, double normalizationFactor)
     {
         if (clip.FootContacts is null)
         {
@@ -1239,7 +1319,7 @@ public sealed class BrowserWorkspaceService
         }
 
         var inContact = track.Ranges.Any(range => frame >= range.StartFrame && frame <= range.EndFrame);
-        return inContact ? 0 : Math.Round(clip.FootContacts.VelocityThreshold, 4);
+        return inContact ? 0 : Math.Round(clip.FootContacts.VelocityThreshold * normalizationFactor, 4);
     }
 
     private static RuntimeFeatureChannelResponse ParseRuntimeFeatureChannel(string feature)
