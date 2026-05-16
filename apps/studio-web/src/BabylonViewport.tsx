@@ -967,7 +967,8 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
     .filter((bone) => bone.translation.length >= 3)
     .filter((bone) => !bone.boneName.toLowerCase().includes('end'))
     .slice(0, 72)
-  const bonePositions = new Map(visibleBones.map((bone) => [normalizeGhostBoneName(bone.boneName), vectorFromSamplingArray(bone.translation, Vector3.Zero())]))
+  const localOffsets = new Map(visibleBones.map((bone) => [normalizeGhostBoneName(bone.boneName), vectorFromSamplingArray(bone.translation, Vector3.Zero())]))
+  const bonePositions = buildGhostBoneWorldPositions(localOffsets)
   const skeletonLines = buildGhostSkeletonLines(bonePositions)
   if (skeletonLines.length) {
     const skeleton = MeshBuilder.CreateLineSystem('sampling-ghost-pose-skeleton', { lines: skeletonLines }, scene)
@@ -978,7 +979,7 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
   }
 
   for (const [index, bone] of visibleBones.entries()) {
-    const position = vectorFromSamplingArray(bone.translation, Vector3.Zero())
+    const position = findGhostBonePosition(bonePositions, bone.boneName) ?? vectorFromSamplingArray(bone.translation, Vector3.Zero())
     if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
       continue
     }
@@ -994,6 +995,34 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
   }
 
   return meshes
+}
+
+function buildGhostBoneWorldPositions(localOffsets: Map<string, Vector3>) {
+  const chains = [
+    ['hips', 'spine', 'spine1', 'spine2', 'neck', 'head'],
+    ['spine2', 'leftshoulder', 'leftarm', 'leftforearm', 'lefthand'],
+    ['spine2', 'rightshoulder', 'rightarm', 'rightforearm', 'righthand'],
+    ['hips', 'leftupleg', 'leftleg', 'leftfoot', 'lefttoebase'],
+    ['hips', 'rightupleg', 'rightleg', 'rightfoot', 'righttoebase'],
+  ]
+  const worldPositions = new Map<string, Vector3>()
+  const rootPosition = findGhostBonePosition(localOffsets, 'hips') ?? Vector3.Zero()
+  worldPositions.set('hips', rootPosition.clone())
+
+  for (const chain of chains) {
+    let currentPosition = findGhostBonePosition(worldPositions, chain[0]) ?? rootPosition.clone()
+    for (const bone of chain.slice(1)) {
+      const localOffset = findGhostBonePosition(localOffsets, bone)
+      if (!localOffset) {
+        continue
+      }
+
+      currentPosition = currentPosition.add(localOffset)
+      worldPositions.set(normalizeGhostBoneName(bone), currentPosition)
+    }
+  }
+
+  return worldPositions.size > 1 ? worldPositions : localOffsets
 }
 
 function buildGhostSkeletonLines(bonePositions: Map<string, Vector3>) {

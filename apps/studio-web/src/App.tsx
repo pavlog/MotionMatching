@@ -95,6 +95,12 @@ type SamplingMatcherPreviewMatch = {
     trajectoryDirection: number
     other: number
   }
+  breakdownCounts: {
+    velocity: number
+    trajectoryPosition: number
+    trajectoryDirection: number
+    other: number
+  }
   matchedFeatureCount: number
 }
 
@@ -2674,6 +2680,12 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
         trajectoryDirection: 0,
         other: 0,
       }
+      const breakdownCounts = {
+        velocity: 0,
+        trajectoryPosition: 0,
+        trajectoryDirection: 0,
+        other: 0,
+      }
 
       for (const [name, queryValue] of Object.entries(queryFeatures)) {
         const sampleValue = sample.features[name]
@@ -2683,8 +2695,10 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
 
         const delta = sampleValue - queryValue
         const componentScore = delta * delta
+        const group = classifySamplingFeature(name)
         score += componentScore
-        breakdown[classifySamplingFeature(name)] += componentScore
+        breakdown[group] += componentScore
+        breakdownCounts[group] += 1
         matchedFeatureCount += 1
       }
 
@@ -2693,8 +2707,9 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
         clipName: clip?.clipName ?? sample.clipId,
         isMirrored: sample.isMirrored,
         frame: sample.frame,
-        score,
+        score: matchedFeatureCount > 0 ? Math.sqrt(score / matchedFeatureCount) : 0,
         breakdown,
+        breakdownCounts,
         matchedFeatureCount,
       }
     })
@@ -2722,16 +2737,21 @@ function classifySamplingFeature(name: string): keyof SamplingMatcherPreviewMatc
 
 function formatSamplingScoreBreakdown(match: SamplingMatcherPreviewMatch) {
   const parts = [
-    `V ${formatNumber(match.breakdown.velocity)}`,
-    `P ${formatNumber(match.breakdown.trajectoryPosition)}`,
-    `D ${formatNumber(match.breakdown.trajectoryDirection)}`,
+    `V ${formatBreakdownGroup(match, 'velocity')}`,
+    `P ${formatBreakdownGroup(match, 'trajectoryPosition')}`,
+    `D ${formatBreakdownGroup(match, 'trajectoryDirection')}`,
   ]
 
   if (match.breakdown.other > 0) {
-    parts.push(`O ${formatNumber(match.breakdown.other)}`)
+    parts.push(`O ${formatBreakdownGroup(match, 'other')}`)
   }
 
   return parts.join('  ')
+}
+
+function formatBreakdownGroup(match: SamplingMatcherPreviewMatch, group: keyof SamplingMatcherPreviewMatch['breakdown']) {
+  const count = match.breakdownCounts[group]
+  return count > 0 ? formatNumber(Math.sqrt(match.breakdown[group] / count)) : '--'
 }
 
 function countSamplingRoleCandidates(query: SamplingQueryResponse, database: RuntimeDatabaseDraftResponse) {
