@@ -515,6 +515,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         var persistedDatabaseJson = await File.ReadAllTextAsync(databasePath);
         Assert.Contains("\"schemaVersion\": \"motionstudio.runtime-database-draft.v0\"", persistedDatabaseJson);
         Assert.Contains("\"id\": \"motionstudio.runtime-database\"", persistedDatabaseJson);
+        Assert.Contains("\"poseSamples\":", persistedDatabaseJson);
         Assert.Contains("\"clipName\": \"RunForward\"", persistedDatabaseJson);
         Assert.Contains("\"samples\": [", persistedDatabaseJson);
         Assert.Contains("\"frame\": 40", persistedDatabaseJson);

@@ -261,6 +261,7 @@ public sealed record RuntimeDatabaseDraftResponse(
     int FeatureCount,
     RuntimeFeatureScaleResponse Scale,
     IReadOnlyList<RuntimeDatabaseClipResponse> Clips,
+    IReadOnlyList<RuntimePoseSampleResponse> PoseSamples,
     IReadOnlyList<RuntimeDatabaseSampleResponse> Samples,
     IReadOnlyList<RuntimeDatabaseSamplePreviewResponse> SamplePreviews,
     IReadOnlyList<BuildReadinessFindingResponse> Findings);

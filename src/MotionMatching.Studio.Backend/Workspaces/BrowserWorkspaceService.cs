@@ -1360,6 +1360,7 @@ public sealed class BrowserWorkspaceService
             featureDraft.FeatureCount,
             featureDraft.Scale,
             databaseClips,
+            poseDraft.Samples,
             samples,
             samplePreviews,
             findings);

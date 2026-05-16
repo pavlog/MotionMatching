@@ -299,6 +299,7 @@ export interface RuntimeDatabaseDraftResponse {
   featureCount: number
   scale: RuntimeFeatureScaleResponse
   clips: RuntimeDatabaseClipResponse[]
+  poseSamples: RuntimePoseSampleResponse[]
   samples: RuntimeDatabaseSampleResponse[]
   samplePreviews: RuntimeDatabaseSamplePreviewResponse[]
   findings: BuildReadinessFindingResponse[]

@@ -713,6 +713,22 @@ function App() {
     }
   }
 
+  async function handleCopyRuntimeBuildFolder(character: CharacterResponse) {
+    const cachedDraft = lastRuntimeDraft?.characterId === character.id ? lastRuntimeDraft : null
+    const draftPath = cachedDraft?.draftPath ?? character.runtimeBuildDraftPath
+    if (!draftPath) {
+      appendLog('Runtime build folder is unavailable until Build Runtime runs.', 'warning')
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(buildFolderFromDraftPath(draftPath))
+      appendLog(`Copied runtime build folder: ${buildFolderFromDraftPath(draftPath)}`)
+    } catch {
+      appendLog('Runtime build folder copy failed', 'error')
+    }
+  }
+
   function openBuildReportViewer(report: BuildReportResponse, currentReadiness: CharacterResponse['buildReadiness']) {
     setTextViewer({
       heading: 'Build Report',
@@ -893,6 +909,7 @@ function App() {
             onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
             onViewRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
             onViewRuntimeDatabaseDraft={() => handleViewRuntimeDatabaseDraft(selectedCharacter)}
+            onCopyRuntimeBuildFolder={() => handleCopyRuntimeBuildFolder(selectedCharacter)}
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
@@ -1191,6 +1208,7 @@ function RuntimeDraftView({
   const changes = currentReadiness ? describeReadinessChanges(readiness, currentReadiness) : []
   const [contractCopyState, setContractCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [pathCopyState, setPathCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [folderCopyState, setFolderCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
 
   async function copyEngineQueryContract() {
     try {
@@ -1207,6 +1225,15 @@ function RuntimeDraftView({
       setPathCopyState('copied')
     } catch {
       setPathCopyState('failed')
+    }
+  }
+
+  async function copyRuntimeBuildFolder() {
+    try {
+      await navigator.clipboard.writeText(buildFolderFromDraftPath(draft.draftPath))
+      setFolderCopyState('copied')
+    } catch {
+      setFolderCopyState('failed')
     }
   }
 
@@ -1244,7 +1271,21 @@ function RuntimeDraftView({
           <Copy size={14} aria-hidden="true" />
           {pathCopyState === 'copied' ? 'Copied Paths' : pathCopyState === 'failed' ? 'Copy Failed' : 'Copy Paths'}
         </button>
+        <button type="button" className="inspector-action" onClick={copyRuntimeBuildFolder}>
+          <Copy size={14} aria-hidden="true" />
+          {folderCopyState === 'copied' ? 'Copied Build Folder' : folderCopyState === 'failed' ? 'Copy Failed' : 'Copy Build Folder'}
+        </button>
       </section>
+      {draft.poses.plannedPoseSampleCount > 0 && draft.poses.samples.length === 0 ? (
+        <section className="report-section">
+          <h3>Pose Warning</h3>
+          <div className="report-table">
+            <div className="report-row warning single">
+              <span>Pose value samples are missing. Rebuild after clip preview GLBs are available, or check clip import warnings.</span>
+            </div>
+          </div>
+        </section>
+      ) : null}
       {changes.length ? (
         <section className="report-section">
           <h3>Outdated Changes</h3>
@@ -1337,6 +1378,8 @@ function RuntimeDraftView({
           <dd>{draft.database.clipCount}</dd>
           <dt>Samples</dt>
           <dd>{draft.database.sampleCount}</dd>
+          <dt>Pose values</dt>
+          <dd>{draft.database.poseSamples.length}</dd>
           <dt>Features</dt>
           <dd>{draft.database.featureCount}</dd>
         </dl>
@@ -1437,6 +1480,8 @@ function DatabaseDraftView({
           <dd>{database.clipCount}</dd>
           <dt>Samples</dt>
           <dd>{database.sampleCount}</dd>
+          <dt>Pose values</dt>
+          <dd>{database.poseSamples.length}</dd>
           <dt>Features</dt>
           <dd>{database.featureCount}</dd>
           <dt>Scale</dt>
@@ -1447,6 +1492,16 @@ function DatabaseDraftView({
           {jsonCopyState === 'copied' ? 'Copied JSON' : jsonCopyState === 'failed' ? 'Copy Failed' : 'Copy JSON'}
         </button>
       </section>
+      {database.sampleCount > 0 && database.poseSamples.length === 0 ? (
+        <section className="report-section">
+          <h3>Pose Warning</h3>
+          <div className="report-table">
+            <div className="report-row warning single">
+              <span>Database has feature samples but no pose values. Runtime import should treat this draft as incomplete.</span>
+            </div>
+          </div>
+        </section>
+      ) : null}
       <section className="report-section">
         <h3>Clips</h3>
         <div className="report-table">
@@ -2159,7 +2214,7 @@ function buildReportPathsText(report: BuildReportResponse) {
 }
 
 function runtimeDraftPathsText(draft: RuntimeBuildDraftResponse) {
-  const buildFolder = draft.draftPath.split('/').slice(0, -1).join('/')
+  const buildFolder = buildFolderFromDraftPath(draft.draftPath)
   const artifactPaths = draft.artifacts.map((artifact) => `${artifact.kind}: ${buildFolder}/${artifact.fileName}`)
 
   return [
@@ -2170,9 +2225,13 @@ function runtimeDraftPathsText(draft: RuntimeBuildDraftResponse) {
 }
 
 function runtimeDatabasePathFromDraft(draft: RuntimeBuildDraftResponse) {
-  const buildFolder = draft.draftPath.split('/').slice(0, -1).join('/')
+  const buildFolder = buildFolderFromDraftPath(draft.draftPath)
   const databaseArtifact = draft.artifacts.find((artifact) => artifact.kind === 'database')
   return databaseArtifact ? `${buildFolder}/${databaseArtifact.fileName}` : `${buildFolder}/${draft.characterName}.mmdatabase`
+}
+
+function buildFolderFromDraftPath(draftPath: string) {
+  return draftPath.split('/').slice(0, -1).join('/')
 }
 
 function formatRuntimeScaleMode(mode: RuntimeScaleMode) {
@@ -2426,6 +2485,7 @@ function CharacterInspector({
   onViewBuildReport,
   onViewRuntimeDraft,
   onViewRuntimeDatabaseDraft,
+  onCopyRuntimeBuildFolder,
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
   onSelectClip,
@@ -2444,6 +2504,7 @@ function CharacterInspector({
   onViewBuildReport: () => void
   onViewRuntimeDraft: () => void
   onViewRuntimeDatabaseDraft: () => void
+  onCopyRuntimeBuildFolder: () => void
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
   onSelectClip: (clipId: string) => void
@@ -2544,6 +2605,16 @@ function CharacterInspector({
         >
           <FileText size={14} aria-hidden="true" />
           View Database Draft
+        </button>
+        <button
+          type="button"
+          className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`}
+          disabled={isBusy || !hasRuntimeDraft}
+          onClick={onCopyRuntimeBuildFolder}
+          title="Copy runtime build folder"
+        >
+          <Copy size={14} aria-hidden="true" />
+          Copy Build Folder
         </button>
       </section>
       <BuildReadinessPanel character={character} onSelectClip={onSelectClip} />
