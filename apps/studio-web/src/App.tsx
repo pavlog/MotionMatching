@@ -68,6 +68,7 @@ type TextViewer = {
 const fallbackFrameCount = 120
 const fallbackFrameRate = 24
 type ClipMotionMode = 'inPlace' | 'rootMotion'
+type CharacterInspectorTab = 'overview' | 'sampling'
 
 const clipRoles = [
   { value: 'idle_loop', description: 'no movement input' },
@@ -114,6 +115,7 @@ function App() {
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false)
   const [animationPreviewState, setAnimationPreviewState] = useState('none')
   const [clipMotionMode, setClipMotionMode] = useState<ClipMotionMode>('inPlace')
+  const [characterInspectorTab, setCharacterInspectorTab] = useState<CharacterInspectorTab>('overview')
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenu | null>(null)
   const [characterContextMenu, setCharacterContextMenu] = useState<CharacterContextMenu | null>(null)
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
@@ -144,6 +146,7 @@ function App() {
   const visibleRuntimeSettingsSaveState = selectedRuntimeSettingsSaveState && selectedRuntimeSettingsSaveState.characterId === selectedCharacter?.id
     ? selectedRuntimeSettingsSaveState.state
     : 'idle'
+  const isSamplingPreviewActive = Boolean(selectedCharacter && !selectedClip && characterInspectorTab === 'sampling')
 
   useEffect(() => {
     timelineFrameRef.current = visibleTimelineFrame
@@ -883,6 +886,7 @@ function App() {
           clipDurationSeconds={selectedClip?.durationSeconds ?? null}
           footContacts={selectedClip?.footContacts ?? null}
           clipMotionMode={clipMotionMode}
+          samplingPreview={isSamplingPreviewActive}
           label={selectedClip ? `${selectedCharacter?.name ?? 'Character'} / ${selectedClip.name}` : selectedCharacter?.name ?? 'Empty scene'}
           onClipMotionModeChange={setClipMotionMode}
           onAnimationStateChange={setAnimationPreviewState}
@@ -915,6 +919,7 @@ function App() {
             lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
             runtimeSampleFrameStep={selectedCharacter.runtimeBuildSettings.sampleFrameStep}
             runtimeScaleMode={selectedCharacter.runtimeBuildSettings.scaleMode}
+            activeTab={characterInspectorTab}
             runtimeSettingsSaveState={visibleRuntimeSettingsSaveState}
             hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
             hasRuntimeDraft={Boolean((lastRuntimeDraft?.characterId === selectedCharacter.id && lastRuntimeDraft) || selectedCharacter.runtimeBuildDraftPath)}
@@ -925,6 +930,7 @@ function App() {
             onViewRuntimeDatabaseDraft={() => handleViewRuntimeDatabaseDraft(selectedCharacter)}
             onCopyRuntimeBuildFolder={() => handleCopyRuntimeBuildFolder(selectedCharacter)}
             onExportRuntimeBuild={() => handleExportRuntimeBuild(selectedCharacter)}
+            onActiveTabChange={setCharacterInspectorTab}
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
@@ -2620,6 +2626,7 @@ function CharacterInspector({
   lastRuntimeDraft,
   runtimeSampleFrameStep,
   runtimeScaleMode,
+  activeTab,
   runtimeSettingsSaveState,
   onGenerateBuildReport,
   onGenerateRuntimeBuildDraft,
@@ -2628,6 +2635,7 @@ function CharacterInspector({
   onViewRuntimeDatabaseDraft,
   onCopyRuntimeBuildFolder,
   onExportRuntimeBuild,
+  onActiveTabChange,
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
   onSelectClip,
@@ -2640,6 +2648,7 @@ function CharacterInspector({
   lastRuntimeDraft: RuntimeBuildDraftResponse | null
   runtimeSampleFrameStep: number
   runtimeScaleMode: RuntimeScaleMode
+  activeTab: CharacterInspectorTab
   runtimeSettingsSaveState: 'idle' | 'saving' | 'saved' | 'failed'
   onGenerateBuildReport: () => void
   onGenerateRuntimeBuildDraft: () => void
@@ -2648,6 +2657,7 @@ function CharacterInspector({
   onViewRuntimeDatabaseDraft: () => void
   onCopyRuntimeBuildFolder: () => void
   onExportRuntimeBuild: () => void
+  onActiveTabChange: (tab: CharacterInspectorTab) => void
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
   onSelectClip: (clipId: string) => void
@@ -2656,143 +2666,172 @@ function CharacterInspector({
     <div className="inspector-content">
       <section className="inspector-section">
         <h2>{character.name}</h2>
-        <dl>
-          <dt>ID</dt>
-          <dd>{character.id}</dd>
-          <dt>Manifest</dt>
-          <dd>{character.manifestPath}</dd>
-          <dt>Visual</dt>
-          <dd>{character.visualManifestPath}</dd>
-          <dt>Preview</dt>
-          <dd>{character.previewUrl ? 'Ready' : 'Not generated'}</dd>
-        <dt>Clips</dt>
-        <dd>{character.clips?.length ?? 0}</dd>
-        <dt>Report</dt>
-        <dd>{formatBuildReportStatus(character.buildReportStatus)}</dd>
-        <dt>Runtime</dt>
-        <dd>{formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}</dd>
-        <dt>Scale</dt>
-        <dd>{formatRuntimeScaleSummary(lastRuntimeDraft)}</dd>
-      </dl>
-        <label className="setting-field">
-          Runtime sample step
-          <input
-            type="number"
-            min={1}
-            max={120}
-            step={1}
-            value={runtimeSampleFrameStep}
-            disabled={isBusy}
-            onChange={(event) => onRuntimeSampleFrameStepChange(Math.min(Math.max(Math.round(Number(event.target.value) || 1), 1), 120))}
-          />
-        </label>
-        <label className="setting-field">
-          Runtime scale mode
-          <select
-            value={runtimeScaleMode}
-            disabled={isBusy}
-            onChange={(event) => onRuntimeScaleModeChange(event.target.value as RuntimeScaleMode)}
+        <div className="inspector-tabs" role="tablist" aria-label="Character inspector tabs">
+          <button
+            type="button"
+            className={activeTab === 'overview' ? 'active' : ''}
+            onClick={() => onActiveTabChange('overview')}
           >
-            {runtimeScaleModes.map((mode) => (
-              <option key={mode.value} value={mode.value}>{mode.label}</option>
-            ))}
-          </select>
-        </label>
-        <span className={`settings-save-state ${runtimeSettingsSaveState}`}>
-          {formatRuntimeSettingsSaveState(runtimeSettingsSaveState)}
-        </span>
-        <button
-          type="button"
-          className="inspector-action"
-          disabled={isBusy}
-          onClick={onGenerateBuildReport}
-        >
-          {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
-          Generate Build Report
-        </button>
-        <button
-          type="button"
-          className="inspector-action"
-          disabled={isBusy}
-          onClick={onGenerateRuntimeBuildDraft}
-        >
-          {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
-          Build Runtime
-        </button>
-        <button
-          type="button"
-          className={`inspector-action report-status-${character.buildReportStatus}`}
-          disabled={isBusy || !hasBuildReport}
-          onClick={onViewBuildReport}
-          title={formatBuildReportStatus(character.buildReportStatus)}
-        >
-          <FileText size={14} aria-hidden="true" />
-          {lastBuildReport ? 'View Report' : character.buildReportPath ? 'Load Report' : 'View Report'}
-        </button>
-        <button
-          type="button"
-          className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`}
-          disabled={isBusy || !hasRuntimeDraft}
-          onClick={onViewRuntimeDraft}
-          title={formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}
-        >
-          <FileText size={14} aria-hidden="true" />
-          {lastRuntimeDraft ? 'View Runtime Draft' : character.runtimeBuildDraftPath ? 'Load Runtime Draft' : 'View Runtime Draft'}
-        </button>
-        <button
-          type="button"
-          className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`}
-          disabled={isBusy || !hasRuntimeDraft}
-          onClick={onViewRuntimeDatabaseDraft}
-          title={formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}
-        >
-          <FileText size={14} aria-hidden="true" />
-          View Database Draft
-        </button>
-        <button
-          type="button"
-          className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`}
-          disabled={isBusy || !hasRuntimeDraft}
-          onClick={onCopyRuntimeBuildFolder}
-          title="Copy runtime build folder"
-        >
-          <Copy size={14} aria-hidden="true" />
-          Copy Build Folder
-        </button>
-        <button
-          type="button"
-          className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`}
-          disabled={isBusy || !hasRuntimeDraft}
-          onClick={onExportRuntimeBuild}
-          title="Export runtime build folder as ZIP"
-        >
-          <Archive size={14} aria-hidden="true" />
-          Export ZIP
-        </button>
-      </section>
-      <BuildReadinessPanel character={character} onSelectClip={onSelectClip} />
-      <BuildPlanPanel character={character} onSelectClip={onSelectClip} />
-      <section className="inspector-section">
-        <h3>Validation</h3>
-        {character.validation ? (
-          <div className={`validation-summary ${character.validation.canCompile ? 'ok' : 'blocked'}`}>
-            {character.validation.canCompile ? <CheckCircle2 size={16} aria-hidden="true" /> : <AlertCircle size={16} aria-hidden="true" />}
-            <span>{character.validation.canCompile ? 'Ready for preview' : 'Blocked'}</span>
-          </div>
-        ) : (
-          <p className="muted">Not checked</p>
-        )}
-        <div className="finding-list">
-          {character.validation?.findings.map((finding) => (
-            <div key={`${finding.severity}-${finding.code}`} className={`finding ${finding.severity}`}>
-              <strong>{finding.code}</strong>
-              <span>{finding.message}</span>
-            </div>
-          ))}
+            Build
+          </button>
+          <button
+            type="button"
+            className={activeTab === 'sampling' ? 'active' : ''}
+            onClick={() => onActiveTabChange('sampling')}
+          >
+            Sampling
+          </button>
         </div>
+        {activeTab === 'overview' ? (
+          <>
+            <dl>
+              <dt>ID</dt>
+              <dd>{character.id}</dd>
+              <dt>Manifest</dt>
+              <dd>{character.manifestPath}</dd>
+              <dt>Visual</dt>
+              <dd>{character.visualManifestPath}</dd>
+              <dt>Preview</dt>
+              <dd>{character.previewUrl ? 'Ready' : 'Not generated'}</dd>
+              <dt>Clips</dt>
+              <dd>{character.clips?.length ?? 0}</dd>
+              <dt>Report</dt>
+              <dd>{formatBuildReportStatus(character.buildReportStatus)}</dd>
+              <dt>Runtime</dt>
+              <dd>{formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}</dd>
+              <dt>Scale</dt>
+              <dd>{formatRuntimeScaleSummary(lastRuntimeDraft)}</dd>
+            </dl>
+            <label className="setting-field">
+              Runtime sample step
+              <input
+                type="number"
+                min={1}
+                max={120}
+                step={1}
+                value={runtimeSampleFrameStep}
+                disabled={isBusy}
+                onChange={(event) => onRuntimeSampleFrameStepChange(Math.min(Math.max(Math.round(Number(event.target.value) || 1), 1), 120))}
+              />
+            </label>
+            <label className="setting-field">
+              Runtime scale mode
+              <select
+                value={runtimeScaleMode}
+                disabled={isBusy}
+                onChange={(event) => onRuntimeScaleModeChange(event.target.value as RuntimeScaleMode)}
+              >
+                {runtimeScaleModes.map((mode) => (
+                  <option key={mode.value} value={mode.value}>{mode.label}</option>
+                ))}
+              </select>
+            </label>
+            <span className={`settings-save-state ${runtimeSettingsSaveState}`}>
+              {formatRuntimeSettingsSaveState(runtimeSettingsSaveState)}
+            </span>
+            <button type="button" className="inspector-action" disabled={isBusy} onClick={onGenerateBuildReport}>
+              {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
+              Generate Build Report
+            </button>
+            <button type="button" className="inspector-action" disabled={isBusy} onClick={onGenerateRuntimeBuildDraft}>
+              {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
+              Build Runtime
+            </button>
+            <button type="button" className={`inspector-action report-status-${character.buildReportStatus}`} disabled={isBusy || !hasBuildReport} onClick={onViewBuildReport} title={formatBuildReportStatus(character.buildReportStatus)}>
+              <FileText size={14} aria-hidden="true" />
+              {lastBuildReport ? 'View Report' : character.buildReportPath ? 'Load Report' : 'View Report'}
+            </button>
+            <button type="button" className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`} disabled={isBusy || !hasRuntimeDraft} onClick={onViewRuntimeDraft} title={formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}>
+              <FileText size={14} aria-hidden="true" />
+              {lastRuntimeDraft ? 'View Runtime Draft' : character.runtimeBuildDraftPath ? 'Load Runtime Draft' : 'View Runtime Draft'}
+            </button>
+            <button type="button" className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`} disabled={isBusy || !hasRuntimeDraft} onClick={onViewRuntimeDatabaseDraft} title={formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}>
+              <FileText size={14} aria-hidden="true" />
+              View Database Draft
+            </button>
+            <button type="button" className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`} disabled={isBusy || !hasRuntimeDraft} onClick={onCopyRuntimeBuildFolder} title="Copy runtime build folder">
+              <Copy size={14} aria-hidden="true" />
+              Copy Build Folder
+            </button>
+            <button type="button" className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`} disabled={isBusy || !hasRuntimeDraft} onClick={onExportRuntimeBuild} title="Export runtime build folder as ZIP">
+              <Archive size={14} aria-hidden="true" />
+              Export ZIP
+            </button>
+          </>
+        ) : (
+          <SamplingInspector character={character} runtimeDraft={lastRuntimeDraft} />
+        )}
       </section>
-      <ImportLogPanel entries={character.importLog} />
+      {activeTab === 'overview' ? (
+        <>
+          <BuildReadinessPanel character={character} onSelectClip={onSelectClip} />
+          <BuildPlanPanel character={character} onSelectClip={onSelectClip} />
+          <section className="inspector-section">
+            <h3>Validation</h3>
+            {character.validation ? (
+              <div className={`validation-summary ${character.validation.canCompile ? 'ok' : 'blocked'}`}>
+                {character.validation.canCompile ? <CheckCircle2 size={16} aria-hidden="true" /> : <AlertCircle size={16} aria-hidden="true" />}
+                <span>{character.validation.canCompile ? 'Ready for preview' : 'Blocked'}</span>
+              </div>
+            ) : (
+              <p className="muted">Not checked</p>
+            )}
+            <div className="finding-list">
+              {character.validation?.findings.map((finding) => (
+                <div key={`${finding.severity}-${finding.code}`} className={`finding ${finding.severity}`}>
+                  <strong>{finding.code}</strong>
+                  <span>{finding.message}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+          <ImportLogPanel entries={character.importLog} />
+        </>
+      ) : null}
     </div>
+  )
+}
+
+function SamplingInspector({
+  character,
+  runtimeDraft,
+}: {
+  character: CharacterResponse
+  runtimeDraft: RuntimeBuildDraftResponse | null
+}) {
+  const runtimeScale = runtimeDraft
+    ? `${formatRuntimeScaleMode(runtimeDraft.features.scale.mode)} x${formatNumber(runtimeDraft.features.scale.normalizationFactor)}`
+    : 'Not generated'
+
+  return (
+    <>
+      <dl>
+        <dt>Character</dt>
+        <dd>{character.name}</dd>
+        <dt>Capsule</dt>
+        <dd>Height 72, radius 14</dd>
+        <dt>Facing</dt>
+        <dd>+Z</dd>
+        <dt>Trajectory</dt>
+        <dd>20 / 40 / 60 frames</dd>
+        <dt>Scale</dt>
+        <dd>{runtimeScale}</dd>
+      </dl>
+      <div className="sampling-query-grid">
+        <span>Position 0, 0, 0</span>
+        <span>Velocity 0, 0, 1</span>
+        <span>Face +Z</span>
+        <span>Mode preview</span>
+      </div>
+      <button type="button" className="inspector-action" disabled title="Matcher is the next slice">
+        <FileText size={14} aria-hidden="true" />
+        Generate Sample
+      </button>
+      <button type="button" className="inspector-action" disabled title="Export comes after generated sample recipes">
+        <Archive size={14} aria-hidden="true" />
+        Export Generated Clip
+      </button>
+    </>
   )
 }
 

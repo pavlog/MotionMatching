@@ -31,6 +31,7 @@ interface BabylonViewportProps {
   clipDurationSeconds: number | null
   footContacts: FootContactDiagnosticsResponse | null
   clipMotionMode: ClipMotionMode
+  samplingPreview: boolean
   label: string
   onClipMotionModeChange?: (mode: ClipMotionMode) => void
   onAnimationStateChange?: (state: string) => void
@@ -68,6 +69,7 @@ export function BabylonViewport({
   clipDurationSeconds,
   footContacts,
   clipMotionMode,
+  samplingPreview,
   label,
   onClipMotionModeChange,
   onAnimationStateChange,
@@ -82,6 +84,7 @@ export function BabylonViewport({
   const footContactsRef = useRef<FootContactDiagnosticsResponse | null>(null)
   const showFootContactsRef = useRef(true)
   const contactMarkersRef = useRef<Partial<Record<FootName, Mesh>>>({})
+  const samplingPreviewMeshesRef = useRef<Mesh[]>([])
   const characterPoseRef = useRef(new Map<PoseTarget, PoseSnapshot>())
   const clipScrubRef = useRef({ frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate, durationSeconds: clipDurationSeconds })
   const [cameraMode, setCameraMode] = useState<'perspective' | 'orthographic'>('perspective')
@@ -351,6 +354,8 @@ export function BabylonViewport({
         marker?.dispose(false, true)
       }
       contactMarkersRef.current = {}
+      disposeSamplingPreview(samplingPreviewMeshesRef.current)
+      samplingPreviewMeshesRef.current = []
       scene.dispose()
       engine.dispose()
       sceneRef.current = null
@@ -506,6 +511,21 @@ export function BabylonViewport({
     applyClipFrame(animationGroup)
   }, [applyClipFrame, clipFrame, clipFrameCount, clipFrameRate])
 
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) {
+      return
+    }
+
+    disposeSamplingPreview(samplingPreviewMeshesRef.current)
+    samplingPreviewMeshesRef.current = []
+    if (!samplingPreview) {
+      return
+    }
+
+    samplingPreviewMeshesRef.current = createSamplingPreview(scene)
+  }, [modelVersion, samplingPreview])
+
   return (
     <section className="viewport-panel" aria-label="3D viewport" data-animation-state={animationState}>
       <canvas ref={canvasRef} className="viewport-canvas" />
@@ -528,7 +548,7 @@ export function BabylonViewport({
         <button
           type="button"
           className={`foot-contact-toggle ${showFootContacts ? 'active' : ''}`}
-          disabled={!footContacts}
+          disabled={!footContacts || samplingPreview}
           onClick={() => setShowFootContacts((current) => !current)}
           title={showFootContacts ? 'Hide foot contacts' : 'Show foot contacts'}
           aria-label="Toggle foot contacts"
@@ -590,6 +610,100 @@ export function BabylonViewport({
       </div>
     </section>
   )
+}
+
+function createSamplingPreview(scene: Scene) {
+  const meshes: Mesh[] = []
+  const capsuleMaterial = new StandardMaterial('sampling-capsule-material', scene)
+  capsuleMaterial.diffuseColor = new Color3(0.16, 0.62, 1)
+  capsuleMaterial.emissiveColor = new Color3(0.05, 0.18, 0.3)
+  capsuleMaterial.alpha = 0.26
+  capsuleMaterial.disableDepthWrite = true
+
+  const faceMaterial = new StandardMaterial('sampling-face-material', scene)
+  faceMaterial.diffuseColor = new Color3(0.45, 0.92, 0.62)
+  faceMaterial.emissiveColor = new Color3(0.16, 0.42, 0.24)
+
+  const trajectoryMaterial = new StandardMaterial('sampling-trajectory-material', scene)
+  trajectoryMaterial.diffuseColor = new Color3(1, 0.7, 0.22)
+  trajectoryMaterial.emissiveColor = new Color3(0.4, 0.22, 0.04)
+
+  const capsuleHeight = 72
+  const capsuleRadius = 14
+  const capsuleBody = MeshBuilder.CreateCylinder('sampling-capsule-body', {
+    height: capsuleHeight - capsuleRadius * 2,
+    diameter: capsuleRadius * 2,
+    tessellation: 32,
+  }, scene)
+  capsuleBody.position.y = (capsuleHeight - capsuleRadius * 2) * 0.5 + capsuleRadius
+  capsuleBody.material = capsuleMaterial
+  capsuleBody.isPickable = false
+  meshes.push(capsuleBody)
+
+  for (const [name, y] of [['top', capsuleHeight - capsuleRadius], ['bottom', capsuleRadius]] as const) {
+    const cap = MeshBuilder.CreateSphere(`sampling-capsule-${name}`, {
+      diameter: capsuleRadius * 2,
+      segments: 24,
+    }, scene)
+    cap.position.y = y
+    cap.material = capsuleMaterial
+    cap.isPickable = false
+    meshes.push(cap)
+  }
+
+  const faceStem = MeshBuilder.CreateCylinder('sampling-face-direction-stem', {
+    height: 46,
+    diameter: 3,
+    tessellation: 12,
+  }, scene)
+  faceStem.position = new Vector3(0, 28, 23)
+  faceStem.rotation.x = Math.PI * 0.5
+  faceStem.material = faceMaterial
+  faceStem.isPickable = false
+  meshes.push(faceStem)
+
+  const faceHead = MeshBuilder.CreateCylinder('sampling-face-direction-head', {
+    height: 12,
+    diameterTop: 0,
+    diameterBottom: 10,
+    tessellation: 18,
+  }, scene)
+  faceHead.position = new Vector3(0, 28, 49)
+  faceHead.rotation.x = Math.PI * 0.5
+  faceHead.material = faceMaterial
+  faceHead.isPickable = false
+  meshes.push(faceHead)
+
+  const trajectoryPoints = [
+    new Vector3(0, 2, 28),
+    new Vector3(10, 2, 60),
+    new Vector3(18, 2, 96),
+  ]
+  for (const [index, point] of trajectoryPoints.entries()) {
+    const marker = MeshBuilder.CreateSphere(`sampling-trajectory-point-${index + 1}`, {
+      diameter: 7,
+      segments: 18,
+    }, scene)
+    marker.position = point
+    marker.material = trajectoryMaterial
+    marker.isPickable = false
+    meshes.push(marker)
+  }
+
+  const trajectoryLine = MeshBuilder.CreateLines('sampling-trajectory-line', {
+    points: [Vector3.Zero(), ...trajectoryPoints],
+  }, scene)
+  trajectoryLine.color = new Color3(1, 0.7, 0.22)
+  trajectoryLine.isPickable = false
+  meshes.push(trajectoryLine)
+
+  return meshes
+}
+
+function disposeSamplingPreview(meshes: Mesh[]) {
+  for (const mesh of meshes) {
+    mesh.dispose(false, true)
+  }
 }
 
 function updateContactMarkers(
