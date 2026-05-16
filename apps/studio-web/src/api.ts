@@ -31,6 +31,8 @@ export interface ClipResponse {
   durationSeconds: number | null
   previewUrl: string | null
   includeInBuild: boolean
+  mirrorInBuild: boolean
+  contactDetectionPreset: ContactDetectionPreset
   rootMotion: RootMotionDiagnosticsResponse | null
   footContacts: FootContactDiagnosticsResponse | null
   validation: ValidationResponse | null
@@ -97,9 +99,13 @@ export interface ImportLogEntryResponse {
 
 export interface ClipSettingsRequest {
   includeInBuild: boolean
+  mirrorInBuild: boolean
   clipRole: string | null
+  contactDetectionPreset: ContactDetectionPreset
   tags: string[]
 }
+
+export type ContactDetectionPreset = 'auto' | 'character_scale' | 'source_scale' | 'strict' | 'loose' | 'manual_only'
 
 export async function openBrowserWorkspace(): Promise<WorkspaceResponse | null> {
   const response = await fetch(`${apiBase}/api/v1/workspaces/browser`)
@@ -166,6 +172,30 @@ export async function uploadClip(characterId: string, file: File): Promise<Chara
   return response.json()
 }
 
+export async function replaceClipSource(characterId: string, clipId: string, file: File): Promise<CharacterResponse> {
+  const body = new FormData()
+  body.append('clip', file)
+
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/clips/${clipId}/replace-source`, {
+    method: 'POST',
+    body,
+  })
+
+  if (response.status === 413) {
+    throw new Error('File is larger than the 50 MB upload limit.')
+  }
+
+  if (response.status === 404) {
+    throw new Error('Clip was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Clip source replace failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
 export async function deleteClip(characterId: string, clipId: string): Promise<CharacterResponse> {
   const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/clips/${clipId}`, {
     method: 'DELETE',
@@ -201,6 +231,22 @@ export async function updateClipSettings(
 
   if (!response.ok) {
     throw new Error(`Clip settings update failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function refreshFootContacts(characterId: string, clipId: string): Promise<CharacterResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/clips/${clipId}/foot-contacts/refresh`, {
+    method: 'POST',
+  })
+
+  if (response.status === 404) {
+    throw new Error('Clip was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Foot contact refresh failed: ${response.status}`)
   }
 
   return response.json()

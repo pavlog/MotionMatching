@@ -65,6 +65,7 @@ run and jump with the current character
 - Unique clip names within a character.
 - Clip source replacement.
 - Clip include/exclude from build flag.
+- Clip mirror-in-build augmentation flag.
 - Imported clips default to included in build.
 - Clip role combobox.
 - Clip global tags as checkboxes.
@@ -223,36 +224,41 @@ Each clip can have one `clipRole`:
 - `idle_loop`
 - `walk_loop`
 - `run_loop`
-- `walk_start`
-- `run_start`
-- `walk_stop`
-- `run_stop`
-- `turn_180`
-- `run_turn_180`
-- `jump_up`
-- `jump_forward_standing`
-- `jump_forward_run`
-- `jump_turn`
+- `start`
+- `stop`
+- `turn_left`
+- `turn_right`
+- `turn_left_180`
+- `turn_right_180`
+- `jump`
 - `fall_loop`
-- `land_soft`
-- `land_run`
-- `land_medium`
-- `land_hard`
+- `land`
+
+Future role workflow:
+
+- MVP ships a small built-in role vocabulary.
+- Later, users should be able to add project/character-specific roles.
+- Custom roles need authored metadata: display name, short description, optional grouping, and runtime/export behavior.
+- Role vocabularies should be load/save/shareable JSON presets. A character can use the built-in vocabulary plus an imported or character-local custom vocabulary file.
+- JSON presets should be portable between projects and should not contain machine-local paths.
+- Built-in roles remain the default portable contract; custom roles are an authoring/runtime extension point, not tags.
 
 ## MVP Tag Vocabulary
 
 Default global tags:
 
-- `idle`
-- `walk`
-- `run`
-- `turn`
-- `start`
-- `stop`
-- `jump`
-- `loop`
+- `neutral`
+- `calm`
+- `happy`
+- `angry`
+- `sad`
+- `tired`
+- `injured`
+- `combat`
+- `stealth`
+- `relaxed`
 
-Users can add custom tags to the character vocabulary.
+Tags describe style, mood, performance variant, or authoring context. Action categories such as walk, run, turn, start, stop, and jump belong in `clipRole`, not tags. Users can add custom tags to the character vocabulary.
 
 ## MVP Validation
 
@@ -286,7 +292,7 @@ The MVP is successful when:
 3. FBX/BVH clips can be imported as separate clips.
 4. A clip can be previewed on the Visual FBX mesh.
 5. Role/tags/contact suggestions appear automatically.
-6. The user can edit clip role, tags, include flag, and contact settings.
+6. The user can edit clip role, tags, include/mirror flags, and contact settings.
 7. A database build produces files compatible with the current Unity package naming/folder convention.
 8. Play Mode runs on a flat plane inside the browser UI.
 9. The selected character can run and jump using the built database, with visible warnings for missing/incomplete roles.

@@ -28,8 +28,13 @@ public static class GltfFootContactDiagnosticsParser
     private const uint BinChunkType = 0x004E4942;
     private const int FloatComponentType = 5126;
     private const double DefaultVelocityThreshold = 15;
+    private const int MaxClosedContactGapFrames = 1;
+    private const int MaxTouchdownLeadFrames = 2;
 
-    public static FootContactDiagnostics? ParseGlb(string glbPath, double velocityThreshold = DefaultVelocityThreshold)
+    public static FootContactDiagnostics? ParseGlb(
+        string glbPath,
+        double velocityThreshold = DefaultVelocityThreshold,
+        bool allowAlmostWholeClipContacts = false)
     {
         var bytes = File.ReadAllBytes(glbPath);
         if (bytes.Length < 20 || BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(0, 4)) != GlbMagic)
@@ -59,13 +64,14 @@ public static class GltfFootContactDiagnosticsParser
         }
 
         var binary = bytes.AsSpan(binaryOffset + 8, binaryLength).ToArray();
-        return ParseGltfJson(jsonText, binary, velocityThreshold);
+        return ParseGltfJson(jsonText, binary, velocityThreshold, allowAlmostWholeClipContacts);
     }
 
     public static FootContactDiagnostics? ParseGltfJson(
         string jsonText,
         byte[] binary,
-        double velocityThreshold = DefaultVelocityThreshold)
+        double velocityThreshold = DefaultVelocityThreshold,
+        bool allowAlmostWholeClipContacts = false)
     {
         using var document = JsonDocument.Parse(jsonText);
         var root = document.RootElement;
@@ -90,7 +96,7 @@ public static class GltfFootContactDiagnosticsParser
             var animationData = ReadAnimationData(channels, samplers, accessors, bufferViews, nodes, binary);
             foreach (var footNodeIndex in Enumerable.Range(0, nodeInfos.Length).Where(index => TryGetFoot(nodeInfos[index].Name) is not null))
             {
-                var track = TryBuildWorldSpaceTrack(footNodeIndex, nodeInfos, animationData, velocityThreshold);
+                var track = TryBuildWorldSpaceTrack(footNodeIndex, nodeInfos, animationData, velocityThreshold, allowAlmostWholeClipContacts);
                 if (track is not null)
                 {
                     candidates.Add(track);
@@ -100,11 +106,9 @@ public static class GltfFootContactDiagnosticsParser
 
         var selected = candidates
             .GroupBy(track => track.Foot, StringComparer.Ordinal)
-            .Select(group => group
-                .OrderByDescending(track => track.Ranges.Sum(range => range.EndFrame - range.StartFrame + 1))
-                .ThenByDescending(track => track.KeyCount)
-                .First())
+            .SelectMany(SelectRepresentativeContactTracks)
             .OrderBy(track => track.Foot, StringComparer.Ordinal)
+            .ThenBy(track => GetContactSourcePriority(track.SourceName))
             .ToArray();
 
         return selected.Length == 0
@@ -112,11 +116,42 @@ public static class GltfFootContactDiagnosticsParser
             : new FootContactDiagnostics(velocityThreshold, selected);
     }
 
+    private static IReadOnlyList<FootContactTrack> SelectRepresentativeContactTracks(IGrouping<string, FootContactTrack> group)
+    {
+        var tracks = group
+            .OrderBy(track => GetContactSourcePriority(track.SourceName))
+            .ThenByDescending(track => track.Ranges.Sum(range => range.EndFrame - range.StartFrame + 1))
+            .ThenByDescending(track => track.KeyCount)
+            .ToArray();
+        var selected = new List<FootContactTrack>();
+        foreach (var track in tracks)
+        {
+            if (selected.Any(existing => existing.SourceName.Equals(track.SourceName, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            var addsDistinctTiming = track.Ranges.Any(range => !selected.Any(existing => existing.Ranges.Any(existingRange => ContainsRange(existingRange, range))));
+            if (selected.Count == 0 || addsDistinctTiming || IsFootSource(track.SourceName))
+            {
+                selected.Add(track);
+            }
+        }
+
+        return selected;
+    }
+
+    private static bool ContainsRange(FootContactRange container, FootContactRange range)
+    {
+        return container.StartFrame <= range.StartFrame && container.EndFrame >= range.EndFrame;
+    }
+
     private static FootContactTrack? TryBuildWorldSpaceTrack(
         int footNodeIndex,
         IReadOnlyList<NodeInfo> nodes,
         AnimationData animationData,
-        double velocityThreshold)
+        double velocityThreshold,
+        bool allowAlmostWholeClipContacts)
     {
         var sourceName = nodes[footNodeIndex].Name;
         var foot = TryGetFoot(sourceName);
@@ -144,9 +179,12 @@ public static class GltfFootContactDiagnosticsParser
             ranges = DetectContactRanges(times, positions, EstimateFallbackThreshold(times, positions, velocityThreshold));
         }
 
-        ranges = ranges
-            .Where(range => !CoversAlmostWholeClip(range, times.Count))
-            .ToArray();
+        if (!allowAlmostWholeClipContacts)
+        {
+            ranges = ranges
+                .Where(range => !CoversAlmostWholeClip(range, times.Count))
+                .ToArray();
+        }
 
         return ranges.Count == 0
             ? null
@@ -408,6 +446,9 @@ public static class GltfFootContactDiagnosticsParser
             }
         }
 
+        CloseShortContactGaps(contactFrames);
+        ExtendTouchdownLeadFrames(contactFrames, positions, velocityThreshold);
+
         var ranges = new List<FootContactRange>();
         var start = -1;
         for (var index = 0; index < contactFrames.Length; index++)
@@ -434,6 +475,72 @@ public static class GltfFootContactDiagnosticsParser
         }
 
         return ranges;
+    }
+
+    private static void CloseShortContactGaps(bool[] contactFrames)
+    {
+        for (var index = 1; index < contactFrames.Length - 1; index++)
+        {
+            if (contactFrames[index])
+            {
+                continue;
+            }
+
+            var gapStart = index;
+            while (index < contactFrames.Length - 1 && !contactFrames[index])
+            {
+                index++;
+            }
+
+            var gapEnd = index - 1;
+            var gapLength = gapEnd - gapStart + 1;
+            if (gapLength <= MaxClosedContactGapFrames && contactFrames[gapStart - 1] && contactFrames[index])
+            {
+                for (var fill = gapStart; fill <= gapEnd; fill++)
+                {
+                    contactFrames[fill] = true;
+                }
+            }
+        }
+    }
+
+    private static void ExtendTouchdownLeadFrames(bool[] contactFrames, IReadOnlyList<Vector3Value> positions, double velocityThreshold)
+    {
+        var leadHeightTolerance = velocityThreshold;
+        for (var index = 1; index < contactFrames.Length; index++)
+        {
+            if (!contactFrames[index] || contactFrames[index - 1])
+            {
+                continue;
+            }
+
+            var rangeEnd = index;
+            while (rangeEnd + 1 < contactFrames.Length && contactFrames[rangeEnd + 1])
+            {
+                rangeEnd++;
+            }
+
+            var plantedHeight = positions[index].Y;
+            for (var plantedIndex = index + 1; plantedIndex <= rangeEnd; plantedIndex++)
+            {
+                plantedHeight = Math.Min(plantedHeight, positions[plantedIndex].Y);
+            }
+
+            for (var lead = 1; lead <= MaxTouchdownLeadFrames && index - lead >= 0; lead++)
+            {
+                var leadIndex = index - lead;
+                if (contactFrames[leadIndex] ||
+                    positions[leadIndex].Y > plantedHeight + leadHeightTolerance ||
+                    positions[leadIndex].Y <= positions[Math.Min(leadIndex + 1, positions.Count - 1)].Y)
+                {
+                    break;
+                }
+
+                contactFrames[leadIndex] = true;
+            }
+
+            index = rangeEnd;
+        }
     }
 
     private static double EstimateTypicalFrameStep(IReadOnlyList<double> times)
@@ -696,6 +803,26 @@ public static class GltfFootContactDiagnosticsParser
         }
 
         return null;
+    }
+
+    private static int GetContactSourcePriority(string sourceName)
+    {
+        if (IsFootSource(sourceName))
+        {
+            return 0;
+        }
+
+        var normalized = NormalizeSourceName(sourceName);
+        return normalized.Contains("toeend", StringComparison.Ordinal) ? 2 : 1;
+    }
+
+    private static bool IsFootSource(string sourceName)
+    {
+        var normalized = NormalizeSourceName(sourceName);
+        return normalized.Contains("leftfoot", StringComparison.Ordinal) ||
+            normalized.Contains("lfoot", StringComparison.Ordinal) ||
+            normalized.Contains("rightfoot", StringComparison.Ordinal) ||
+            normalized.Contains("rfoot", StringComparison.Ordinal);
     }
 
     private static string NormalizeSourceName(string sourceName)

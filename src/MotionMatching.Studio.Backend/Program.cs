@@ -127,6 +127,47 @@ app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/clips", async (
 })
 .DisableAntiforgery();
 
+app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/replace-source", async (
+    string characterId,
+    string clipId,
+    HttpRequest request,
+    BrowserWorkspaceService workspaceService,
+    IOptions<StudioBackendOptions> options,
+    CancellationToken cancellationToken) =>
+{
+    if (!request.HasFormContentType)
+    {
+        return Results.BadRequest(new { error = "multipart_form_required" });
+    }
+
+    var form = await request.ReadFormAsync(cancellationToken);
+    var clip = form.Files.GetFile("clip");
+    if (clip is null)
+    {
+        return Results.BadRequest(new { error = "clip_file_required" });
+    }
+
+    if (clip.Length > options.Value.MaxUploadBytes)
+    {
+        return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    }
+
+    try
+    {
+        var result = await workspaceService.ReplaceClipSourceAsync(characterId, clipId, clip, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { error = "invalid_clip", message = exception.Message });
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "clip_not_found", message = exception.Message });
+    }
+})
+.DisableAntiforgery();
+
 app.MapDelete("/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}", async (
     string characterId,
     string clipId,
@@ -159,6 +200,23 @@ app.MapPatch("/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}
     catch (ArgumentException exception)
     {
         return Results.BadRequest(new { error = "invalid_clip_settings", message = exception.Message });
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "clip_not_found", message = exception.Message });
+    }
+});
+
+app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/foot-contacts/refresh", async (
+    string characterId,
+    string clipId,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.RefreshClipFootContactsAsync(characterId, clipId, cancellationToken);
+        return Results.Ok(result);
     }
     catch (KeyNotFoundException exception)
     {

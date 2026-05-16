@@ -212,21 +212,47 @@ public sealed class BackendApiTests : IAsyncLifetime
             new
             {
                 includeInBuild = false,
-                clipRole = "run_loop",
+                mirrorInBuild = true,
+                clipRole = "run_stop",
+                contactDetectionPreset = "strict",
                 tags = new[] { "Run", "Loop", "custom tag" }
             });
         var settingsJson = await settingsResponse.Content.ReadAsStringAsync();
 
         settingsResponse.EnsureSuccessStatusCode();
         Assert.Contains("\"includeInBuild\":false", settingsJson);
-        Assert.Contains("\"clipRole\":\"run_loop\"", settingsJson);
+        Assert.Contains("\"mirrorInBuild\":true", settingsJson);
+        Assert.Contains("\"clipRole\":\"stop\"", settingsJson);
+        Assert.Contains("\"contactDetectionPreset\":\"strict\"", settingsJson);
         Assert.Contains("\"tags\":[\"custom_tag\",\"loop\",\"run\"]", settingsJson);
 
         var persistedClipJson = await File.ReadAllTextAsync(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "Clips", "RunForward", "clip.json"));
         Assert.Contains("\"includeInBuild\": false", persistedClipJson);
-        Assert.Contains("\"clipRole\": \"run_loop\"", persistedClipJson);
+        Assert.Contains("\"mirrorInBuild\": true", persistedClipJson);
+        Assert.Contains("\"clipRole\": \"stop\"", persistedClipJson);
+        Assert.Contains("\"contactDetectionPreset\": \"strict\"", persistedClipJson);
         Assert.Contains("\"custom_tag\"", persistedClipJson);
         Assert.DoesNotContain(_workspaceRoot, persistedClipJson);
+
+        using var replacementForm = new MultipartFormDataContent();
+        replacementForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("HIERARCHY\nROOT Hips\nMOTION\nFrames: 12\nFrame Time: 0.0416667\n")), "clip", "StopForward.bvh");
+
+        var replacementResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/replace-source", replacementForm);
+        var replacementJson = await replacementResponse.Content.ReadAsStringAsync();
+
+        replacementResponse.EnsureSuccessStatusCode();
+        Assert.Contains($"\"id\":\"{clipId}\"", replacementJson);
+        Assert.Contains("\"sourceFileName\":\"StopForward.bvh\"", replacementJson);
+        Assert.Contains("\"includeInBuild\":false", replacementJson);
+        Assert.Contains("\"mirrorInBuild\":true", replacementJson);
+        Assert.Contains("\"clipRole\":\"stop\"", replacementJson);
+        Assert.Contains("\"contactDetectionPreset\":\"strict\"", replacementJson);
+
+        persistedClipJson = await File.ReadAllTextAsync(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "Clips", "RunForward", "clip.json"));
+        Assert.Contains("\"sourceFileName\": \"StopForward.bvh\"", persistedClipJson);
+        Assert.Contains("\"frameCount\": 12", persistedClipJson);
+        Assert.Contains("\"includeInBuild\": false", persistedClipJson);
+        Assert.Contains("\"mirrorInBuild\": true", persistedClipJson);
     }
 
     [Fact]

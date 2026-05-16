@@ -15,21 +15,33 @@ public sealed class BrowserWorkspaceService
         "idle_loop",
         "walk_loop",
         "run_loop",
-        "walk_start",
-        "run_start",
-        "walk_stop",
-        "run_stop",
-        "turn_180",
-        "run_turn_180",
-        "jump_up",
-        "jump_forward_standing",
-        "jump_forward_run",
-        "jump_turn",
+        "start",
+        "stop",
+        "turn_left",
+        "turn_right",
+        "turn_left_180",
+        "turn_right_180",
+        "jump",
         "fall_loop",
-        "land_soft",
-        "land_run",
-        "land_medium",
-        "land_hard"
+        "land"
+    };
+
+    private static readonly IReadOnlyDictionary<string, string> LegacyClipRoleAliases = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["walk_start"] = "start",
+        ["run_start"] = "start",
+        ["walk_stop"] = "stop",
+        ["run_stop"] = "stop",
+        ["turn_180"] = "turn_right_180",
+        ["run_turn_180"] = "turn_right_180",
+        ["jump_up"] = "jump",
+        ["jump_forward_standing"] = "jump",
+        ["jump_forward_run"] = "jump",
+        ["jump_turn"] = "jump",
+        ["land_soft"] = "land",
+        ["land_run"] = "land",
+        ["land_medium"] = "land",
+        ["land_hard"] = "land"
     };
 
     private readonly StudioBackendOptions _options;
@@ -280,6 +292,78 @@ public sealed class BrowserWorkspaceService
         return await ToCharacterResponseAsync(reference, cancellationToken);
     }
 
+    public async Task<CharacterResponse> ReplaceClipSourceAsync(
+        string characterId,
+        string clipId,
+        IFormFile clipFile,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+
+        var characterManifestPath = Path.Combine(GetWorkspaceRoot(), reference.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(characterManifestPath))
+        {
+            throw new KeyNotFoundException("Character manifest was not found.");
+        }
+
+        var character = ManifestJson.Deserialize<CharacterManifest>(await File.ReadAllTextAsync(characterManifestPath, cancellationToken));
+        var characterRoot = Path.GetDirectoryName(characterManifestPath) ?? throw new InvalidOperationException("Character manifest path has no directory.");
+
+        foreach (var relativeManifestPath in character.ClipManifestPaths)
+        {
+            var clipManifestPath = Path.Combine(characterRoot, relativeManifestPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(clipManifestPath))
+            {
+                continue;
+            }
+
+            var clip = ManifestJson.Deserialize<ClipManifest>(await File.ReadAllTextAsync(clipManifestPath, cancellationToken));
+            if (clip.Id.Value != clipId)
+            {
+                continue;
+            }
+
+            var clipRoot = Path.GetDirectoryName(clipManifestPath) ?? throw new InvalidOperationException("Clip manifest path has no directory.");
+            var extension = Path.GetExtension(clipFile.FileName).ToLowerInvariant();
+            var sourcePath = Path.Combine(clipRoot, $"source{extension}");
+            var updatedClip = ClipManifest.FromUploadedSource(
+                clip.Id,
+                clip.Name,
+                clipFile.FileName,
+                clipFile.Length) with
+            {
+                ImportedAtUtc = DateTimeOffset.UtcNow,
+                IncludeInBuild = clip.IncludeInBuild,
+                MirrorInBuild = clip.MirrorInBuild,
+                ContactDetectionPreset = clip.ContactDetectionPreset,
+                ClipRole = clip.ClipRole,
+                Tags = clip.Tags
+            };
+
+            var oldSourcePath = Path.Combine(clipRoot, clip.ManagedSourcePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!string.Equals(Path.GetFullPath(oldSourcePath), Path.GetFullPath(sourcePath), StringComparison.OrdinalIgnoreCase) &&
+                File.Exists(oldSourcePath))
+            {
+                File.Delete(oldSourcePath);
+            }
+
+            await using (var stream = File.Create(sourcePath))
+            await using (var input = clipFile.OpenReadStream())
+            {
+                await input.CopyToAsync(stream, cancellationToken);
+            }
+
+            updatedClip = await PopulateClipTimelineMetadataAsync(updatedClip, sourcePath, cancellationToken);
+            ClearClipCache(clipRoot);
+            await WriteManifestAsync(clipManifestPath, updatedClip, cancellationToken);
+            return await ToCharacterResponseAsync(reference, cancellationToken);
+        }
+
+        throw new KeyNotFoundException("Clip was not found.");
+    }
+
     private async Task<WorkspaceManifest> EnsureWorkspaceManifestAsync(CancellationToken cancellationToken)
     {
         await CreateOrOpenBrowserWorkspaceAsync(cancellationToken);
@@ -368,7 +452,7 @@ public sealed class BrowserWorkspaceService
                 ? TryReadRootMotionDiagnostics(GetClipPreviewPath(clipRoot))
                 : null;
             var footContacts = previewUrl is not null
-                ? TryReadFootContactDiagnostics(GetClipPreviewPath(clipRoot), clip.FrameCount, clip.DurationSeconds)
+                ? TryReadFootContactDiagnostics(GetClipPreviewPath(clipRoot), clip.FrameCount, clip.DurationSeconds, clip.ContactDetectionPreset, ShouldAllowAlmostWholeClipFootContacts(clip, rootMotion))
                 : null;
             var skeletonValidation = await ValidateClipSkeletonAsync(characterRoot, clip, sourcePath, cancellationToken);
             var importLog = BuildClipImportLog(clip, previewUrl, rootMotion, footContacts, skeletonValidation);
@@ -379,13 +463,15 @@ public sealed class BrowserWorkspaceService
                 relativeManifestPath,
                 clip.SourceKind.ToString().ToLowerInvariant(),
                 clip.SourceFileName,
-                clip.ClipRole,
+                NormalizeClipRole(clip.ClipRole),
                 clip.Tags,
                 clip.FrameCount,
                 clip.FrameRate,
                 clip.DurationSeconds,
                 previewUrl,
                 clip.IncludeInBuild,
+                clip.MirrorInBuild,
+                ToSerializedContactDetectionPreset(clip.ContactDetectionPreset),
                 rootMotion,
                 footContacts,
                 skeletonValidation.Validation,
@@ -430,15 +516,54 @@ public sealed class BrowserWorkspaceService
             }
 
             var role = NormalizeClipRole(request.ClipRole);
+            var contactDetectionPreset = NormalizeContactDetectionPreset(request.ContactDetectionPreset);
             var updatedClip = clip with
             {
                 IncludeInBuild = request.IncludeInBuild,
+                MirrorInBuild = request.MirrorInBuild,
                 ClipRole = role,
+                ContactDetectionPreset = contactDetectionPreset,
                 Tags = NormalizeTags(request.Tags)
             };
 
             await WriteManifestAsync(clipManifestPath, updatedClip, cancellationToken);
             return await ToCharacterResponseAsync(reference, cancellationToken);
+        }
+
+        throw new KeyNotFoundException("Clip was not found.");
+    }
+
+    public async Task<CharacterResponse> RefreshClipFootContactsAsync(
+        string characterId,
+        string clipId,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+
+        var characterManifestPath = Path.Combine(GetWorkspaceRoot(), reference.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(characterManifestPath))
+        {
+            throw new KeyNotFoundException("Character manifest was not found.");
+        }
+
+        var character = ManifestJson.Deserialize<CharacterManifest>(await File.ReadAllTextAsync(characterManifestPath, cancellationToken));
+        var characterRoot = Path.GetDirectoryName(characterManifestPath) ?? throw new InvalidOperationException("Character manifest path has no directory.");
+
+        foreach (var relativeManifestPath in character.ClipManifestPaths)
+        {
+            var clipManifestPath = Path.Combine(characterRoot, relativeManifestPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(clipManifestPath))
+            {
+                continue;
+            }
+
+            var clip = ManifestJson.Deserialize<ClipManifest>(await File.ReadAllTextAsync(clipManifestPath, cancellationToken));
+            if (clip.Id.Value == clipId)
+            {
+                return await ToCharacterResponseAsync(reference, cancellationToken);
+            }
         }
 
         throw new KeyNotFoundException("Clip was not found.");
@@ -565,6 +690,15 @@ public sealed class BrowserWorkspaceService
         return Path.Combine(clipRoot, "Cache", "Preview", "clip.glb");
     }
 
+    private static void ClearClipCache(string clipRoot)
+    {
+        var cacheRoot = Path.Combine(clipRoot, "Cache");
+        if (Directory.Exists(cacheRoot))
+        {
+            Directory.Delete(cacheRoot, recursive: true);
+        }
+    }
+
     private static RootMotionDiagnosticsResponse? TryReadRootMotionDiagnostics(string previewPath)
     {
         if (!File.Exists(previewPath))
@@ -596,16 +730,21 @@ public sealed class BrowserWorkspaceService
     private static FootContactDiagnosticsResponse? TryReadFootContactDiagnostics(
         string previewPath,
         int? clipFrameCount,
-        double? clipDurationSeconds)
+        double? clipDurationSeconds,
+        ContactDetectionPreset preset,
+        bool allowAlmostWholeClipContacts)
     {
-        if (!File.Exists(previewPath))
+        if (!File.Exists(previewPath) || preset == ContactDetectionPreset.ManualOnly)
         {
             return null;
         }
 
         try
         {
-            var diagnostics = GltfFootContactDiagnosticsParser.ParseGlb(previewPath);
+            var diagnostics = GltfFootContactDiagnosticsParser.ParseGlb(
+                previewPath,
+                ResolveFootContactVelocityThreshold(preset),
+                allowAlmostWholeClipContacts);
             return diagnostics is null
                 ? null
                 : new FootContactDiagnosticsResponse(
@@ -624,6 +763,30 @@ public sealed class BrowserWorkspaceService
         {
             return null;
         }
+    }
+
+    private static bool ShouldAllowAlmostWholeClipFootContacts(ClipManifest clip, RootMotionDiagnosticsResponse? rootMotion)
+    {
+        if (clip.ClipRole?.Equals("idle_loop", StringComparison.OrdinalIgnoreCase) == true ||
+            clip.Tags.Any(tag => tag.Equals("idle", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return rootMotion is not null && rootMotion.AverageHorizontalSpeed < 0.2;
+    }
+
+    private static double ResolveFootContactVelocityThreshold(ContactDetectionPreset preset)
+    {
+        return preset switch
+        {
+            ContactDetectionPreset.CharacterScale => 0.15,
+            ContactDetectionPreset.Strict => 7.5,
+            ContactDetectionPreset.Loose => 30,
+            ContactDetectionPreset.Auto or ContactDetectionPreset.SourceScale => 15,
+            ContactDetectionPreset.ManualOnly => double.PositiveInfinity,
+            _ => 15
+        };
     }
 
     private static int ToClipFrame(double seconds, int? clipFrameCount, double? clipDurationSeconds, int fallbackFrame)
@@ -693,12 +856,50 @@ public sealed class BrowserWorkspaceService
         }
 
         var normalized = NormalizeToken(role);
+        if (LegacyClipRoleAliases.TryGetValue(normalized, out var alias))
+        {
+            normalized = alias;
+        }
+
         if (!KnownClipRoles.Contains(normalized))
         {
             throw new ArgumentException($"Unknown clip role: {role}", nameof(role));
         }
 
         return normalized;
+    }
+
+    private static ContactDetectionPreset NormalizeContactDetectionPreset(string? preset)
+    {
+        if (string.IsNullOrWhiteSpace(preset))
+        {
+            return ContactDetectionPreset.Auto;
+        }
+
+        return NormalizeToken(preset) switch
+        {
+            "auto" => ContactDetectionPreset.Auto,
+            "character_scale" => ContactDetectionPreset.CharacterScale,
+            "source_scale" => ContactDetectionPreset.SourceScale,
+            "strict" => ContactDetectionPreset.Strict,
+            "loose" => ContactDetectionPreset.Loose,
+            "manual_only" => ContactDetectionPreset.ManualOnly,
+            _ => throw new ArgumentException($"Unknown contact detection preset: {preset}", nameof(preset))
+        };
+    }
+
+    private static string ToSerializedContactDetectionPreset(ContactDetectionPreset preset)
+    {
+        return preset switch
+        {
+            ContactDetectionPreset.Auto => "auto",
+            ContactDetectionPreset.CharacterScale => "character_scale",
+            ContactDetectionPreset.SourceScale => "source_scale",
+            ContactDetectionPreset.Strict => "strict",
+            ContactDetectionPreset.Loose => "loose",
+            ContactDetectionPreset.ManualOnly => "manual_only",
+            _ => "auto"
+        };
     }
 
     private static List<string> NormalizeTags(IEnumerable<string> tags)
@@ -815,6 +1016,7 @@ public sealed class BrowserWorkspaceService
         entries.Add(rootMotion is null
             ? Warning("Root motion diagnostics are unavailable")
             : Info($"Root motion: {rootMotion.SourceName}, XZ {rootMotion.HorizontalDistance:0.##} units"));
+        entries.Add(Info($"Foot contact preset: {ToSerializedContactDetectionPreset(clip.ContactDetectionPreset)}"));
         entries.Add(footContacts is null
             ? Warning("Foot contact diagnostics are unavailable")
             : Info($"Foot contacts: {footContacts.Tracks.Sum(track => track.Ranges.Count)} range(s) from {footContacts.Tracks.Count} foot track(s)"));

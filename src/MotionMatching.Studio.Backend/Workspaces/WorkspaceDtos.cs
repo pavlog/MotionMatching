@@ -29,6 +29,8 @@ public sealed record ClipResponse(
     double? DurationSeconds,
     string? PreviewUrl,
     bool IncludeInBuild,
+    bool MirrorInBuild,
+    string ContactDetectionPreset,
     RootMotionDiagnosticsResponse? RootMotion,
     FootContactDiagnosticsResponse? FootContacts,
     ValidationResponse? Validation,
@@ -86,5 +88,7 @@ public sealed record ImportLogEntryResponse(
 
 public sealed record ClipSettingsRequest(
     bool IncludeInBuild,
+    bool MirrorInBuild,
     string? ClipRole,
+    string? ContactDetectionPreset,
     IReadOnlyList<string> Tags);

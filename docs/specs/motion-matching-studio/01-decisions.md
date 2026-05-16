@@ -282,6 +282,7 @@ MyMotionWorkspace/
 - Existing clips remain after Visual FBX replacement; validators report issues and the user decides.
 - Replacing clip source overwrites the managed clip source file.
 - Replacement preserves clip ID, clip name, tags, settings, and include flag.
+- Clip source replacement is exposed from the clip inspector as `Replace Source`. It accepts FBX/BVH, clears derived clip cache, reparses timeline metadata, regenerates preview/diagnostics on demand, and preserves include/mirror/contact preset/role/tag settings.
 - If extension changes, the managed source filename extension updates.
 - Timeline/range tags transfer by frame number.
 - There is no built-in source revision history in MVP.
@@ -444,6 +445,7 @@ After clip reprocess/replacement:
 - Clips can be included or excluded from build by the user.
 - New imported clips default to `includeInBuild = true`.
 - Included clips with `Error` findings block build until fixed or excluded.
+- Clips can opt into `mirrorInBuild`, shown in UI as `Add mirrored copy`. This is a build-time augmentation flag: build planning expands one included source clip into an original entry plus a mirrored entry. It is not a tag and does not create a second imported clip in the authoring tree.
 - Clip rows and inspectors show validation state using colors and icons for errors/warnings.
 - Left panel rows show aggregate validation badges.
 - Character rows show highest severity and counts across visual import, included clips, and build readiness.
@@ -483,34 +485,39 @@ Bone length mismatch policy:
 - Users can add custom vocabulary tags.
 - Clip tags are edited as checkboxes in the right inspector.
 - Add Tag expands the character vocabulary.
-- Tags help filtering, search, and semantic metadata.
+- Tags help filtering, search, and authoring metadata.
+- Tags describe style, mood, performance variant, or context such as calm, happy, angry, tired, injured, combat, stealth, relaxed.
+- Tags must not duplicate `clipRole` semantics such as walk/run/turn/start/stop. Those belong in the controlled role vocabulary.
+- The clip inspector includes a helper to clear legacy action tags (`idle`, `walk`, `run`, `turn`, `start`, `stop`, `jump`, `loop`) from existing clips after the role/tag split.
 - `disabled` is not part of the default semantic tag vocabulary.
 
 Default global tags for MVP:
 
-- `idle`
-- `walk`
-- `run`
-- `turn`
-- `start`
-- `stop`
-- `jump`
-- `loop`
+- `neutral`
+- `calm`
+- `happy`
+- `angry`
+- `sad`
+- `tired`
+- `injured`
+- `combat`
+- `stealth`
+- `relaxed`
 
-No generic `transition` tag in MVP. `start`, `stop`, `turn`, and `jump` are specific enough. Stable looping clips use `loop`.
+No generic `transition` tag in MVP. Action categories such as start, stop, turn, jump, walk, and run should be represented by `clipRole`, not tags.
 
 Clip role is separate from tags:
 
 - One clip has one controlled `clipRole`.
 - `clipRole` drives preview/runtime semantics.
-- Tags remain supplemental classification/filter metadata.
+- Tags remain supplemental style/mood/variant metadata.
 - PreviewRuntime uses role-constrained state transitions/search for gameplay states such as jump and land.
 - For example, pressing jump chooses/searches within the appropriate jump role subset rather than searching the whole database blindly.
 - Ground locomotion also uses role-constrained state transitions/search:
   - No input uses `idle_loop`.
-  - Run input uses `run_start`/`run_loop`.
-  - Shift-walk input uses `walk_start`/`walk_loop`.
-  - Release input uses `run_stop` or `walk_stop`.
+  - Run input uses `start`/`run_loop`.
+  - Shift-walk input uses `start`/`walk_loop`.
+  - Release input uses `stop`.
   - 180-degree turn input uses turn roles where applicable.
 
 MVP turn testing focuses on 180-degree turns:
@@ -538,21 +545,17 @@ MVP `clipRole` vocabulary:
 - `idle_loop`
 - `walk_loop`
 - `run_loop`
-- `walk_start`
-- `run_start`
-- `walk_stop`
-- `run_stop`
-- `turn_180`
-- `run_turn_180`
-- `jump_up`
-- `jump_forward_standing`
-- `jump_forward_run`
-- `jump_turn`
+- `start`
+- `stop`
+- `turn_left`
+- `turn_right`
+- `turn_left_180`
+- `turn_right_180`
+- `jump`
 - `fall_loop`
-- `land_soft`
-- `land_run`
-- `land_medium`
-- `land_hard`
+- `land`
+
+Legacy role tokens from earlier experiments are normalized on save/load where possible: `walk_start`/`run_start` -> `start`, `walk_stop`/`run_stop` -> `stop`, `turn_180`/`run_turn_180` -> `turn_right_180`, jump variants -> `jump`, and land variants -> `land`.
 
 Auto-detection should suggest both global tags and `clipRole`; the user can override `clipRole` with a combobox.
 
@@ -585,14 +588,21 @@ Clips without `clipRole` may still be included as generic search data with warni
 - Browser MVP foot-contact preview is read-only diagnostics derived from the clip preview GLB. It reconstructs foot/toe world-space motion from the glTF node hierarchy plus animated translation/rotation/scale channels, exposes the source node names in the inspector, and draws left/right contact bars on the timeline. Until asset unit normalization lands, the browser GLB diagnostics use a source-unit velocity threshold (`15 u/s`) rather than the future character-level normalized default; if that fixed threshold finds nothing, the preview falls back to a low-percentile velocity cutoff for that foot/toe track so the user still gets useful visual hints. This is preview/debug data only and must not rewrite clip source files or manifests.
 - Foot-contact API responses expose range seconds from the source GLB and range frames normalized back onto the clip timeline. Do not show raw foot-track sample indices as clip frames, because foot/toe channels can have different key counts and sampling than the main clip timeline.
 - The viewport also shows active foot contacts in 3D as transient colored markers near the matched foot/toe target: left is blue and right is amber. These markers are a preview overlay driven by the current timeline time and the read-only diagnostics, not authored clip data. Do not apply an extra visual frame bias after normalizing contact ranges onto the clip timeline; previous `+1` preview bias made contact starts appear one frame late.
-- Foot contact diagnostics must discard a single contact range that covers almost the whole clip. This usually means the detector has too little useful planted-foot motion signal for the current clip/scale settings, and showing it would mislead the user.
+- Foot contact diagnostics must discard a single contact range that covers almost the whole clip for locomotion clips. This usually means the detector has too little useful planted-foot motion signal for the current clip/scale settings, and showing it would mislead the user. Idle/stationary clips are the exception: `idle_loop`, `idle` tag, or near-zero root horizontal speed can legitimately have full-clip foot contacts.
+- Foot contact diagnostics close a single-frame internal gap between contact ranges. Tiny one-frame velocity spikes can split one visually continuous plant into ranges like `F 1-8` and `F 10-11`; the preview should show that as one planted-foot contact instead.
+- Foot contact diagnostics can include up to two touchdown lead frames before a detected planted range when the foot/toe is already near the planted height and descending. This keeps the preview aligned with visual ground contact without applying a blind frame bias to every range.
+- Foot contact diagnostics keep representative foot and toe tracks for a side when they carry useful timing. A `Right_Foot`/`Left_Foot` track represents heel/foot strike, while toe tracks can still represent toe contacts and toe-off. If both are active, viewport marker selection prefers the foot track first.
+- The clip inspector exposes a Foot Contacts refresh action. In the current MVP this is an explicit re-read/re-detect of read-only diagnostics from the derived preview GLB and returns an updated clip response; it must not persist authored contact ranges or rewrite the clip manifest until authored contact editing exists.
 - Clips can override contact detection settings.
-- Per-clip contact detection mode is editable through a combobox.
-- Initial contact detection modes:
-  - `Velocity`
-  - `VelocityAndHeight`
-  - `ManualOnly`
-- MVP only needs to implement `Velocity`; schema/UI can allow future modes.
+- Per-clip contact detection uses a preset combobox instead of exposing raw threshold/smoothing fields. Clip manifests persist only the preset token; the backend maps presets to detector parameters so future detector changes do not rewrite project data around old magic numbers.
+- Initial contact detection presets:
+  - `auto`
+  - `source_scale`
+  - `character_scale`
+  - `strict`
+  - `loose`
+  - `manual_only`
+- MVP implements the presets as velocity-threshold variants over the current read-only diagnostics. `manual_only` disables auto-detected preview contacts until authored contact editing exists.
 - MVP visualizes detected contact ranges but does not require range editing.
 
 ## Timeline Decisions
@@ -630,16 +640,16 @@ Clips without `clipRole` may still be included as generic search data with warni
 - MVP jump trajectory is authoritative from PreviewRuntime character physics using character tuning such as jump height and gravity.
 - Jump animation selection/synchronization is layered on top of the preview physics trajectory.
 - MVP jump behavior includes the GDD grace-window rule:
-  - Standing neutral jump starts as `jump_up`.
-  - If directional input arrives within `jumpDirectionGraceWindow`, it commits once into `jump_forward_standing`.
+  - Standing neutral jump starts as `jump`.
+  - If directional input arrives within `jumpDirectionGraceWindow`, the same `jump` role can be paired with trajectory analysis/tuning.
   - Once committed, jump direction stays locked until landing.
 - MVP enforces strict no-air-steering after takeoff until landing.
 - MVP Play Mode includes coyote time and jump buffer using character tuning defaults.
 - MVP landing severity follows the GDD fall height/time rules:
-  - Below `landSoftHeight`: `land_soft`.
-  - Between `landSoftHeight` and `landMedHeight`: `land_medium`.
-  - Between `landMedHeight` and `maxSafeFallHeight`: `land_hard`.
-  - Landing while still committed to forward velocity can use `land_run`.
+  - Below `landSoftHeight`: `land`.
+  - Between `landSoftHeight` and `landMedHeight`: `land`.
+  - Between `landMedHeight` and `maxSafeFallHeight`: `land`.
+  - Landing while still committed to forward velocity can use `land` plus motion analysis/tuning.
   - Above `maxSafeFallHeight` or `maxSafeFallTime`: unsafe/death condition; preview can reset or show a warning instead of implementing death presentation.
 - MVP Play Mode includes a Drop Test control to lift/drop the character from a chosen height for landing validation.
 - Drop Test has quick controls in the viewport toolbar and exact settings in the inspector.
@@ -663,21 +673,15 @@ Required MVP roles for full Play Mode readiness:
 - `idle_loop`
 - `walk_loop`
 - `run_loop`
-- `walk_start`
-- `run_start`
-- `walk_stop`
-- `run_stop`
-- `turn_180`
-- `run_turn_180`
-- `jump_up`
-- `jump_forward_standing`
-- `jump_forward_run`
-- `jump_turn`
+- `start`
+- `stop`
+- `turn_left`
+- `turn_right`
+- `turn_left_180`
+- `turn_right_180`
+- `jump`
 - `fall_loop`
-- `land_soft`
-- `land_run`
-- `land_medium`
-- `land_hard`
+- `land`
 
 Character-level preview tuning defaults:
 

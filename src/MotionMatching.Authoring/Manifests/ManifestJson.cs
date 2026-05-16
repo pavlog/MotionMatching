@@ -29,6 +29,7 @@ public static class ManifestJson
         options.Converters.Add(new StudioIdJsonConverter());
         options.Converters.Add(new JsonStringEnumConverter<WorkspaceMode>(JsonNamingPolicy.SnakeCaseLower));
         options.Converters.Add(new JsonStringEnumConverter<ClipSourceKind>(JsonNamingPolicy.SnakeCaseLower));
+        options.Converters.Add(new JsonStringEnumConverter<ContactDetectionPreset>(JsonNamingPolicy.SnakeCaseLower));
         return options;
     }
 }

@@ -31,6 +31,10 @@ public sealed record ClipManifest
 
     public bool IncludeInBuild { get; init; } = true;
 
+    public bool MirrorInBuild { get; init; }
+
+    public ContactDetectionPreset ContactDetectionPreset { get; init; } = ContactDetectionPreset.Auto;
+
     public string? ClipRole { get; init; }
 
     public List<string> Tags { get; init; } = [];
@@ -86,4 +90,14 @@ public enum ClipSourceKind
 {
     Fbx,
     Bvh
+}
+
+public enum ContactDetectionPreset
+{
+    Auto,
+    CharacterScale,
+    SourceScale,
+    Strict,
+    Loose,
+    ManualOnly
 }

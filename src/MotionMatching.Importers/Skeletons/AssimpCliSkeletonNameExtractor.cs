@@ -43,6 +43,13 @@ public sealed partial class AssimpCliSkeletonNameExtractor : ISkeletonNameExtrac
 
         var scene = AssimpCliInfoParser.Parse(result.StandardOutput);
         var boneNames = scene.Skeletons.SelectMany(skeleton => skeleton.BoneNames).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (boneNames.Length == 0)
+        {
+            boneNames = AssimpCliInfoParser.ParseHierarchyNodeNames(result.StandardOutput)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
         return boneNames.Length > 0
             ? SkeletonNameExtractionResult.Success(boneNames)
             : SkeletonNameExtractionResult.Failed("No skeleton node names were found.");

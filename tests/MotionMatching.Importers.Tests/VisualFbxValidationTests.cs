@@ -116,6 +116,33 @@ public class VisualFbxValidationTests
     }
 
     [Fact]
+    public void AssimpCliInfoParserExtractsAnimationOnlyHierarchyNames()
+    {
+        const string info = """
+            Meshes:             0
+            Bones:              0
+            Animation Channels: 46
+
+            Node hierarchy:
+            RootNode
+            '-Skeleton
+              '-Hips
+                |-Spine
+                | '-Chest
+                '-Left_UpperLeg
+                  '-Left_LowerLeg
+                    '-Left_Foot
+            """;
+
+        var names = AssimpCliInfoParser.ParseHierarchyNodeNames(info);
+
+        Assert.Contains("Skeleton", names);
+        Assert.Contains("Hips", names);
+        Assert.Contains("Spine", names);
+        Assert.Contains("Left_Foot", names);
+    }
+
+    [Fact]
     public async Task SkeletonNameExtractorReadsBvhHierarchyBones()
     {
         var path = Path.Combine(Path.GetTempPath(), $"clip-{Guid.NewGuid():N}.bvh");
@@ -322,6 +349,56 @@ public class VisualFbxValidationTests
     }
 
     [Fact]
+    public void GltfFootContactDiagnosticsParserAllowsFullClipContactsForIdle()
+    {
+        var binary = new byte[sizeof(float) * 4 + sizeof(float) * 3 * 4];
+        WriteFloat(binary, 0, 0.0f);
+        WriteFloat(binary, 4, 0.1f);
+        WriteFloat(binary, 8, 0.2f);
+        WriteFloat(binary, 12, 0.3f);
+        for (var offset = 16; offset < binary.Length; offset += 4)
+        {
+            WriteFloat(binary, offset, 0.0f);
+        }
+
+        const string gltf = """
+            {
+              "nodes": [
+                { "name": "mixamorig:LeftFoot" }
+              ],
+              "animations": [
+                {
+                  "samplers": [
+                    { "input": 0, "output": 1 }
+                  ],
+                  "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "translation" } }
+                  ]
+                }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 16 },
+                { "buffer": 0, "byteOffset": 16, "byteLength": 48 }
+              ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 4, "type": "SCALAR" },
+                { "bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3" }
+              ]
+            }
+            """;
+
+        var defaultDiagnostics = GltfFootContactDiagnosticsParser.ParseGltfJson(gltf, binary, velocityThreshold: 0.15);
+        var idleDiagnostics = GltfFootContactDiagnosticsParser.ParseGltfJson(gltf, binary, velocityThreshold: 0.15, allowAlmostWholeClipContacts: true);
+
+        Assert.Null(defaultDiagnostics);
+        Assert.NotNull(idleDiagnostics);
+        var track = Assert.Single(idleDiagnostics.Tracks);
+        var range = Assert.Single(track.Ranges);
+        Assert.Equal(0, range.StartFrame);
+        Assert.Equal(3, range.EndFrame);
+    }
+
+    [Fact]
     public void GltfFootContactDiagnosticsParserUsesWorldSpaceParentMotion()
     {
         var binary = new byte[sizeof(float) * 4 + sizeof(float) * 4 * 4];
@@ -369,6 +446,132 @@ public class VisualFbxValidationTests
         var range = Assert.Single(track.Ranges);
         Assert.Equal(0, range.StartFrame);
         Assert.Equal(2, range.EndFrame);
+    }
+
+    [Fact]
+    public void GltfFootContactDiagnosticsParserClosesSingleFrameContactGaps()
+    {
+        const int keyCount = 14;
+        var binary = new byte[sizeof(float) * keyCount + sizeof(float) * 3 * keyCount];
+        var positions = new[]
+        {
+            4.0f,
+            0.0f,
+            0.005f,
+            0.010f,
+            0.015f,
+            0.020f,
+            0.025f,
+            0.030f,
+            0.035f,
+            1.0f,
+            2.0f,
+            2.005f,
+            4.0f,
+            6.0f
+        };
+
+        for (var index = 0; index < keyCount; index++)
+        {
+            WriteFloat(binary, index * sizeof(float), index * 0.1f);
+            var positionOffset = sizeof(float) * keyCount + index * sizeof(float) * 3;
+            WriteFloat(binary, positionOffset, positions[index]);
+            WriteFloat(binary, positionOffset + 4, 0.0f);
+            WriteFloat(binary, positionOffset + 8, 0.0f);
+        }
+
+        const string gltf = """
+            {
+              "nodes": [
+                { "name": "mixamorig:RightFoot" }
+              ],
+              "animations": [
+                {
+                  "samplers": [
+                    { "input": 0, "output": 1 }
+                  ],
+                  "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "translation" } }
+                  ]
+                }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 56 },
+                { "buffer": 0, "byteOffset": 56, "byteLength": 168 }
+              ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 14, "type": "SCALAR" },
+                { "bufferView": 1, "componentType": 5126, "count": 14, "type": "VEC3" }
+              ]
+            }
+            """;
+
+        var diagnostics = GltfFootContactDiagnosticsParser.ParseGltfJson(gltf, binary, velocityThreshold: 0.15);
+
+        Assert.NotNull(diagnostics);
+        var track = Assert.Single(diagnostics.Tracks);
+        var range = Assert.Single(track.Ranges);
+        Assert.Equal(1, range.StartFrame);
+        Assert.Equal(11, range.EndFrame);
+    }
+
+    [Fact]
+    public void GltfFootContactDiagnosticsParserIncludesNearGroundTouchdownLeadFrame()
+    {
+        const int keyCount = 6;
+        var binary = new byte[sizeof(float) * keyCount + sizeof(float) * 3 * keyCount];
+        var positions = new[]
+        {
+            (X: 0.0f, Y: 20.0f),
+            (X: 0.0f, Y: 4.0f),
+            (X: 10.0f, Y: 1.0f),
+            (X: 10.001f, Y: 1.0f),
+            (X: 10.002f, Y: 1.0f),
+            (X: 30.0f, Y: 20.0f)
+        };
+
+        for (var index = 0; index < keyCount; index++)
+        {
+            WriteFloat(binary, index * sizeof(float), index * 0.1f);
+            var positionOffset = sizeof(float) * keyCount + index * sizeof(float) * 3;
+            WriteFloat(binary, positionOffset, positions[index].X);
+            WriteFloat(binary, positionOffset + 4, positions[index].Y);
+            WriteFloat(binary, positionOffset + 8, 0.0f);
+        }
+
+        const string gltf = """
+            {
+              "nodes": [
+                { "name": "mixamorig:RightFoot" }
+              ],
+              "animations": [
+                {
+                  "samplers": [
+                    { "input": 0, "output": 1 }
+                  ],
+                  "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "translation" } }
+                  ]
+                }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 24 },
+                { "buffer": 0, "byteOffset": 24, "byteLength": 72 }
+              ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 6, "type": "SCALAR" },
+                { "bufferView": 1, "componentType": 5126, "count": 6, "type": "VEC3" }
+              ]
+            }
+            """;
+
+        var diagnostics = GltfFootContactDiagnosticsParser.ParseGltfJson(gltf, binary, velocityThreshold: 15);
+
+        Assert.NotNull(diagnostics);
+        var track = Assert.Single(diagnostics.Tracks);
+        var range = Assert.Single(track.Ranges);
+        Assert.Equal(1, range.StartFrame);
+        Assert.Equal(4, range.EndFrame);
     }
 
     [Fact]

@@ -229,6 +229,7 @@ POST /api/v1/characters/{characterId}/visual/replace
 POST /api/v1/characters/{characterId}/clips/import
 POST /api/v1/characters/{characterId}/clips/{clipId}/replace-source
 PATCH /api/v1/characters/{characterId}/clips/{clipId}
+POST /api/v1/characters/{characterId}/clips/{clipId}/foot-contacts/refresh
 
 POST /api/v1/characters/{characterId}/build
 GET  /api/v1/characters/{characterId}/build/latest-report

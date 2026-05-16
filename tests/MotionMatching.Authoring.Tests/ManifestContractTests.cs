@@ -44,6 +44,10 @@ public class ManifestContractTests
         Assert.Equal("RunForward.bvh", clip.SourceFileName);
         Assert.Equal("source.bvh", clip.ManagedSourcePath);
         Assert.Equal(ClipSourceKind.Bvh, clip.SourceKind);
+        Assert.False(clip.MirrorInBuild);
+        Assert.Contains("\"mirrorInBuild\": false", json);
+        Assert.Equal(ContactDetectionPreset.Auto, clip.ContactDetectionPreset);
+        Assert.Contains("\"contactDetectionPreset\": \"auto\"", json);
         Assert.DoesNotContain("C:", json);
         Assert.DoesNotContain("imports", json);
     }

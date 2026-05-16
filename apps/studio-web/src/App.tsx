@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Box as BoxIcon, CheckCircle2, CirclePlus, FileText, Film, ListTree, Loader2, Pause, Play, StepBack, StepForward, TerminalSquare, Trash2, TriangleAlert } from 'lucide-react'
+import { AlertCircle, Box as BoxIcon, CheckCircle2, CirclePlus, FileText, Film, ListTree, Loader2, Pause, Play, RefreshCw, StepBack, StepForward, TerminalSquare, Trash2, TriangleAlert } from 'lucide-react'
 import {
   type ClipResponse,
   type CharacterResponse,
+  type ContactDetectionPreset,
   type WorkspaceResponse,
   createBrowserWorkspace,
   deleteClip,
   openBrowserWorkspace,
+  refreshFootContacts,
+  replaceClipSource,
   resolveAssetUrl,
   updateClipSettings,
   uploadClip,
@@ -38,31 +41,36 @@ const fallbackFrameRate = 24
 type ClipMotionMode = 'inPlace' | 'rootMotion'
 
 const clipRoles = [
-  'idle_loop',
-  'walk_loop',
-  'run_loop',
-  'walk_start',
-  'run_start',
-  'walk_stop',
-  'run_stop',
-  'turn_180',
-  'run_turn_180',
-  'jump_up',
-  'jump_forward_standing',
-  'jump_forward_run',
-  'jump_turn',
-  'fall_loop',
-  'land_soft',
-  'land_run',
-  'land_medium',
-  'land_hard',
+  { value: 'idle_loop', description: 'no movement input' },
+  { value: 'walk_loop', description: 'moving slowly' },
+  { value: 'run_loop', description: 'moving fast' },
+  { value: 'start', description: 'beginning movement' },
+  { value: 'stop', description: 'ending movement' },
+  { value: 'turn_left', description: 'committed left turn' },
+  { value: 'turn_right', description: 'committed right turn' },
+  { value: 'turn_left_180', description: 'reversing left' },
+  { value: 'turn_right_180', description: 'reversing right' },
+  { value: 'jump', description: 'jump begins' },
+  { value: 'fall_loop', description: 'airborne or falling' },
+  { value: 'land', description: 'landing' },
 ]
 
-const defaultClipTags = ['idle', 'walk', 'run', 'turn', 'start', 'stop', 'jump', 'loop']
+const defaultClipTags = ['neutral', 'calm', 'happy', 'angry', 'sad', 'tired', 'injured', 'combat', 'stealth', 'relaxed']
+const legacyActionTags = ['idle', 'walk', 'run', 'turn', 'start', 'stop', 'jump', 'loop']
+
+const contactDetectionPresets: Array<{ value: ContactDetectionPreset; label: string }> = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'source_scale', label: 'Source scale' },
+  { value: 'character_scale', label: 'Character scale' },
+  { value: 'strict', label: 'Strict' },
+  { value: 'loose', label: 'Loose' },
+  { value: 'manual_only', label: 'Manual only' },
+]
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const clipInputRef = useRef<HTMLInputElement>(null)
+  const replaceClipInputRef = useRef<HTMLInputElement>(null)
   const timelineFrameRef = useRef(0)
   const [workspace, setWorkspace] = useState<WorkspaceResponse | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
@@ -93,6 +101,7 @@ function App() {
   const visibleLoopStartFrame = Math.min(Math.max(loopStartFrame, 0), maxTimelineFrame)
   const visibleLoopEndFrame = Math.max(visibleLoopStartFrame, loopEndFrame >= 0 ? Math.min(loopEndFrame, maxTimelineFrame) : maxTimelineFrame)
   const hasClipTimelineMetadata = Boolean(selectedClip?.frameCount && selectedClip.frameRate && selectedClip.durationSeconds)
+  const latestLog = logs.at(-1)
 
   useEffect(() => {
     timelineFrameRef.current = visibleTimelineFrame
@@ -337,6 +346,40 @@ function App() {
     }
   }
 
+  async function handleReplaceClipSource(file: File) {
+    if (!selectedCharacter || !selectedClip) {
+      appendLog('Select a clip before replacing its source', 'warning')
+      return
+    }
+
+    setIsBusy(true)
+    appendLog(`Replacing source for ${selectedClip.name}`)
+    try {
+      const updatedCharacter = await replaceClipSource(selectedCharacter.id, selectedClip.id, file)
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((character) =>
+              character.id === updatedCharacter.id ? updatedCharacter : character,
+            ),
+          }
+        : currentWorkspace)
+      const updatedClip = updatedCharacter.clips.find((clip) => clip.id === selectedClip.id)
+      if (updatedClip) {
+        selectClip(updatedCharacter.id, updatedClip.id)
+        appendImportLogs(updatedClip.importLog)
+      }
+      appendLog(`Replaced source for ${updatedClip?.name ?? selectedClip.name}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Clip source replace failed', 'error')
+    } finally {
+      setIsBusy(false)
+      if (replaceClipInputRef.current) {
+        replaceClipInputRef.current.value = ''
+      }
+    }
+  }
+
   async function handleDeleteClip(characterId: string, clipId: string) {
     const character = workspace?.characters.find((item) => item.id === characterId)
     const clip = character?.clips.find((item) => item.id === clipId)
@@ -379,13 +422,15 @@ function App() {
   async function handleUpdateClipSettings(
     characterId: string,
     clip: ClipResponse,
-    settings: Partial<Pick<ClipResponse, 'includeInBuild' | 'clipRole' | 'tags'>>,
+    settings: Partial<Pick<ClipResponse, 'includeInBuild' | 'mirrorInBuild' | 'clipRole' | 'contactDetectionPreset' | 'tags'>>,
   ) {
     setIsBusy(true)
     try {
       const updatedCharacter = await updateClipSettings(characterId, clip.id, {
         includeInBuild: settings.includeInBuild ?? clip.includeInBuild,
+        mirrorInBuild: settings.mirrorInBuild ?? clip.mirrorInBuild,
         clipRole: settings.clipRole === undefined ? clip.clipRole : settings.clipRole,
+        contactDetectionPreset: settings.contactDetectionPreset ?? clip.contactDetectionPreset,
         tags: settings.tags ?? clip.tags,
       })
 
@@ -400,6 +445,28 @@ function App() {
       appendLog(`Updated clip settings for ${clip.name}`)
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Clip settings update failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function handleRefreshFootContacts(characterId: string, clip: ClipResponse) {
+    setIsBusy(true)
+    appendLog(`Refreshing foot contacts for ${clip.name}`)
+    try {
+      const updatedCharacter = await refreshFootContacts(characterId, clip.id)
+
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((item) =>
+              item.id === updatedCharacter.id ? updatedCharacter : item,
+            ),
+          }
+        : currentWorkspace)
+      appendLog(`Refreshed foot contacts for ${clip.name}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Foot contact refresh failed', 'error')
     } finally {
       setIsBusy(false)
     }
@@ -435,6 +502,18 @@ function App() {
             const file = event.target.files?.[0]
             if (file) {
               handleAddClip(file)
+            }
+          }}
+        />
+        <input
+          ref={replaceClipInputRef}
+          className="hidden-file-input"
+          type="file"
+          accept=".fbx,.bvh"
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) {
+              handleReplaceClipSource(file)
             }
           }}
         />
@@ -517,6 +596,8 @@ function App() {
             clipMotionMode={clipMotionMode}
             isBusy={isBusy}
             onUpdateSettings={(settings) => handleUpdateClipSettings(selectedCharacter.id, selectedClip, settings)}
+            onRefreshFootContacts={() => handleRefreshFootContacts(selectedCharacter.id, selectedClip)}
+            onReplaceSource={() => replaceClipInputRef.current?.click()}
           />
         ) : selectedCharacter ? (
           <CharacterInspector character={selectedCharacter} />
@@ -556,11 +637,9 @@ function App() {
         <div className="log-strip">
           <TerminalSquare size={15} aria-hidden="true" />
           <div className="log-lines">
-            {logs.map((entry) => (
-              <span key={entry.id} className={`log-line ${entry.level}`}>
-                {entry.message}
-              </span>
-            ))}
+            <span className={`log-line ${latestLog?.level ?? 'info'}`}>
+              {latestLog?.message ?? 'Ready'}
+            </span>
           </div>
         </div>
       </section>
@@ -878,16 +957,21 @@ function ClipInspector({
   clipMotionMode,
   isBusy,
   onUpdateSettings,
+  onRefreshFootContacts,
+  onReplaceSource,
 }: {
   character: CharacterResponse
   clip: ClipResponse
   animationPreviewState: string
   clipMotionMode: ClipMotionMode
   isBusy: boolean
-  onUpdateSettings: (settings: Partial<Pick<ClipResponse, 'includeInBuild' | 'clipRole' | 'tags'>>) => void
+  onUpdateSettings: (settings: Partial<Pick<ClipResponse, 'includeInBuild' | 'mirrorInBuild' | 'clipRole' | 'contactDetectionPreset' | 'tags'>>) => void
+  onRefreshFootContacts: () => void
+  onReplaceSource: () => void
 }) {
   const [customTag, setCustomTag] = useState('')
   const activeTags = new Set(clip.tags)
+  const hasLegacyActionTags = clip.tags.some((tag) => legacyActionTags.includes(tag))
   const toggleTag = (tag: string) => {
     const nextTags = activeTags.has(tag)
       ? clip.tags.filter((item) => item !== tag)
@@ -906,6 +990,10 @@ function ClipInspector({
     setCustomTag('')
   }
 
+  const clearLegacyActionTags = () => {
+    onUpdateSettings({ tags: clip.tags.filter((tag) => !legacyActionTags.includes(tag)) })
+  }
+
   return (
     <div className="inspector-content">
       <section className="inspector-section">
@@ -922,7 +1010,7 @@ function ClipInspector({
           <dt>Kind</dt>
           <dd>{clip.sourceKind.toUpperCase()}</dd>
           <dt>Build</dt>
-          <dd>{clip.includeInBuild ? 'Included' : 'Excluded'}</dd>
+          <dd>{clip.includeInBuild ? `Included${clip.mirrorInBuild ? ' + mirrored copy' : ''}` : 'Excluded'}</dd>
           <dt>Role</dt>
           <dd>{clip.clipRole ?? 'Unassigned'}</dd>
           <dt>Tags</dt>
@@ -935,10 +1023,21 @@ function ClipInspector({
           <dd>{formatAnimationPreviewState(animationPreviewState)}</dd>
           <dt>Motion</dt>
           <dd>{clipMotionMode === 'rootMotion' ? 'Root motion' : 'In-place'}</dd>
+          <dt>Contacts</dt>
+          <dd>{formatContactDetectionPreset(clip.contactDetectionPreset)}</dd>
         </dl>
       </section>
       <section className="inspector-section">
         <h3>Clip Settings</h3>
+        <button
+          type="button"
+          className="inspector-action"
+          disabled={isBusy}
+          onClick={onReplaceSource}
+        >
+          <RefreshCw size={14} aria-hidden="true" />
+          Replace Source
+        </button>
         <label className="setting-row">
           <span>Include in build</span>
           <input
@@ -946,6 +1045,15 @@ function ClipInspector({
             checked={clip.includeInBuild}
             disabled={isBusy}
             onChange={(event) => onUpdateSettings({ includeInBuild: event.target.checked })}
+          />
+        </label>
+        <label className="setting-row">
+          <span>Add mirrored copy</span>
+          <input
+            type="checkbox"
+            checked={clip.mirrorInBuild}
+            disabled={isBusy || !clip.includeInBuild}
+            onChange={(event) => onUpdateSettings({ mirrorInBuild: event.target.checked })}
           />
         </label>
         <label className="setting-field">
@@ -957,7 +1065,19 @@ function ClipInspector({
           >
             <option value="">Unassigned</option>
             {clipRoles.map((role) => (
-              <option key={role} value={role}>{role}</option>
+              <option key={role.value} value={role.value}>{`${role.value} - ${role.description}`}</option>
+            ))}
+          </select>
+        </label>
+        <label className="setting-field">
+          <span>Contact preset</span>
+          <select
+            value={clip.contactDetectionPreset}
+            disabled={isBusy}
+            onChange={(event) => onUpdateSettings({ contactDetectionPreset: event.target.value as ContactDetectionPreset })}
+          >
+            {contactDetectionPresets.map((preset) => (
+              <option key={preset.value} value={preset.value}>{preset.label}</option>
             ))}
           </select>
         </label>
@@ -1004,6 +1124,14 @@ function ClipInspector({
             ))}
           </div>
         ) : null}
+        <button
+          type="button"
+          className="inspector-action"
+          disabled={isBusy || !hasLegacyActionTags}
+          onClick={clearLegacyActionTags}
+        >
+          Clear action tags
+        </button>
       </section>
       <section className="inspector-section">
         <h3>Validation</h3>
@@ -1069,6 +1197,15 @@ function ClipInspector({
       </section>
       <section className="inspector-section">
         <h3>Foot Contacts</h3>
+        <button
+          type="button"
+          className="inspector-action"
+          disabled={isBusy || !clip.previewUrl}
+          onClick={onRefreshFootContacts}
+        >
+          {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}
+          Refresh
+        </button>
         {clip.footContacts ? (
           <>
             <dl>
@@ -1113,6 +1250,10 @@ function formatAnimationPreviewState(state: string) {
   }
 
   return 'Not active'
+}
+
+function formatContactDetectionPreset(preset: ContactDetectionPreset) {
+  return contactDetectionPresets.find((item) => item.value === preset)?.label ?? 'Auto'
 }
 
 function formatRootMotionDelta(rootMotion: NonNullable<ClipResponse['rootMotion']>) {

@@ -68,31 +68,41 @@
     "includeInBuild": {
       "type": "boolean"
     },
+    "mirrorInBuild": {
+      "type": "boolean",
+      "description": "Build-time option shown as Add mirrored copy. When true, the build plan keeps the original clip and adds a mirrored copy."
+    },
+    "contactDetectionPreset": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "character_scale",
+        "source_scale",
+        "strict",
+        "loose",
+        "manual_only"
+      ]
+    },
     "clipRole": {
       "type": "string",
       "enum": [
         "idle_loop",
         "walk_loop",
         "run_loop",
-        "walk_start",
-        "run_start",
-        "walk_stop",
-        "run_stop",
-        "turn_180",
-        "run_turn_180",
-        "jump_up",
-        "jump_forward_standing",
-        "jump_forward_run",
-        "jump_turn",
+        "start",
+        "stop",
+        "turn_left",
+        "turn_right",
+        "turn_left_180",
+        "turn_right_180",
+        "jump",
         "fall_loop",
-        "land_soft",
-        "land_run",
-        "land_medium",
-        "land_hard"
+        "land"
       ]
     },
     "tags": {
       "type": "array",
+      "description": "Style, mood, or authoring metadata such as calm, happy, angry, tired, injured, combat, or stealth. Do not duplicate clipRole semantics such as walk/run/turn/start/stop.",
       "items": {
         "type": "string"
       }
