@@ -89,6 +89,12 @@ type SamplingMatcherPreviewMatch = {
   isMirrored: boolean
   frame: number
   score: number
+  breakdown: {
+    velocity: number
+    trajectoryPosition: number
+    trajectoryDirection: number
+    other: number
+  }
   matchedFeatureCount: number
 }
 
@@ -2662,6 +2668,12 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
 
       let score = 0
       let matchedFeatureCount = 0
+      const breakdown = {
+        velocity: 0,
+        trajectoryPosition: 0,
+        trajectoryDirection: 0,
+        other: 0,
+      }
 
       for (const [name, queryValue] of Object.entries(queryFeatures)) {
         const sampleValue = sample.features[name]
@@ -2670,7 +2682,9 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
         }
 
         const delta = sampleValue - queryValue
-        score += delta * delta
+        const componentScore = delta * delta
+        score += componentScore
+        breakdown[classifySamplingFeature(name)] += componentScore
         matchedFeatureCount += 1
       }
 
@@ -2680,6 +2694,7 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
         isMirrored: sample.isMirrored,
         frame: sample.frame,
         score,
+        breakdown,
         matchedFeatureCount,
       }
     })
@@ -2687,6 +2702,36 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
     .filter((match) => match.matchedFeatureCount > 0)
     .sort((left, right) => left.score - right.score)
     .slice(0, 5)
+}
+
+function classifySamplingFeature(name: string): keyof SamplingMatcherPreviewMatch['breakdown'] {
+  if (name === 'hips_velocity' || name.endsWith('_velocity')) {
+    return 'velocity'
+  }
+
+  if (name.startsWith('trajectory_position_')) {
+    return 'trajectoryPosition'
+  }
+
+  if (name.startsWith('trajectory_direction_')) {
+    return 'trajectoryDirection'
+  }
+
+  return 'other'
+}
+
+function formatSamplingScoreBreakdown(match: SamplingMatcherPreviewMatch) {
+  const parts = [
+    `V ${formatNumber(match.breakdown.velocity)}`,
+    `P ${formatNumber(match.breakdown.trajectoryPosition)}`,
+    `D ${formatNumber(match.breakdown.trajectoryDirection)}`,
+  ]
+
+  if (match.breakdown.other > 0) {
+    parts.push(`O ${formatNumber(match.breakdown.other)}`)
+  }
+
+  return parts.join('  ')
 }
 
 function countSamplingRoleCandidates(query: SamplingQueryResponse, database: RuntimeDatabaseDraftResponse) {
@@ -3500,7 +3545,7 @@ function SamplingInspector({
                   key={`${match.clipId}-${match.isMirrored ? 'mirror' : 'source'}-${match.frame}`}
                   type="button"
                   className={`sampling-match-row ${selectedMatchKey === samplingMatcherPreviewKey(match) ? 'active' : ''}`}
-                  title={`${match.matchedFeatureCount} feature channels compared. Double click opens the clip frame.`}
+                  title={`${match.matchedFeatureCount} feature channels compared. ${formatSamplingScoreBreakdown(match)}. Double click opens the clip frame.`}
                   onClick={() => onPreviewMatch(match)}
                   onDoubleClick={() => onSelectMatch(match)}
                 >
@@ -3508,6 +3553,7 @@ function SamplingInspector({
                   <strong>{`${match.clipName}${match.isMirrored ? ' Mirror' : ''}`}</strong>
                   <span>{`F${match.frame + 1}`}</span>
                   <span>{formatNumber(match.score)}</span>
+                  <span className="sampling-match-breakdown">{formatSamplingScoreBreakdown(match)}</span>
                 </button>
               ))}
             </div>

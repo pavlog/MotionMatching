@@ -8,6 +8,7 @@ import {
   Camera,
   Color3,
   Color4,
+  DynamicTexture,
   Engine,
   HemisphericLight,
   Mesh,
@@ -901,6 +902,9 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
     marker.isPickable = true
     marker.metadata = { samplingTrajectoryIndex: index }
     meshes.push(marker)
+
+    const frameOffset = samplingQuery?.trajectory[index]?.frameOffset ?? (index + 1) * 20
+    meshes.push(createSamplingLabel(scene, `+${frameOffset}f`, point.add(new Vector3(0, 9, 0)), `sampling-trajectory-label-${index}`))
   }
 
   const trajectoryLine = MeshBuilder.CreateLines('sampling-trajectory-line', {
@@ -931,6 +935,26 @@ function pickSamplingDragPoint(scene: Scene) {
   return pick?.hit && pick.pickedPoint ? pick.pickedPoint : null
 }
 
+function createSamplingLabel(scene: Scene, text: string, position: Vector3, name: string) {
+  const texture = new DynamicTexture(`${name}-texture`, { width: 128, height: 48 }, scene, true)
+  texture.hasAlpha = true
+  texture.drawText(text, 10, 32, 'bold 24px Arial', '#f4f8ff', 'transparent', true)
+
+  const material = new StandardMaterial(`${name}-material`, scene)
+  material.diffuseTexture = texture
+  material.emissiveTexture = texture
+  material.opacityTexture = texture
+  material.disableLighting = true
+  material.disableDepthWrite = true
+
+  const label = MeshBuilder.CreatePlane(name, { width: 18, height: 6.75 }, scene)
+  label.position = position
+  label.material = material
+  label.isPickable = false
+  label.billboardMode = Mesh.BILLBOARDMODE_ALL
+  return label
+}
+
 function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) {
   const meshes: Mesh[] = []
   const material = new StandardMaterial('sampling-ghost-pose-material', scene)
@@ -943,6 +967,15 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
     .filter((bone) => bone.translation.length >= 3)
     .filter((bone) => !bone.boneName.toLowerCase().includes('end'))
     .slice(0, 72)
+  const bonePositions = new Map(visibleBones.map((bone) => [normalizeGhostBoneName(bone.boneName), vectorFromSamplingArray(bone.translation, Vector3.Zero())]))
+  const skeletonLines = buildGhostSkeletonLines(bonePositions)
+  if (skeletonLines.length) {
+    const skeleton = MeshBuilder.CreateLineSystem('sampling-ghost-pose-skeleton', { lines: skeletonLines }, scene)
+    skeleton.color = new Color3(0.76, 0.9, 1)
+    skeleton.alpha = 0.52
+    skeleton.isPickable = false
+    meshes.push(skeleton)
+  }
 
   for (const [index, bone] of visibleBones.entries()) {
     const position = vectorFromSamplingArray(bone.translation, Vector3.Zero())
@@ -961,6 +994,46 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
   }
 
   return meshes
+}
+
+function buildGhostSkeletonLines(bonePositions: Map<string, Vector3>) {
+  const chains = [
+    ['hips', 'spine', 'spine1', 'spine2', 'neck', 'head'],
+    ['spine2', 'leftshoulder', 'leftarm', 'leftforearm', 'lefthand'],
+    ['spine2', 'rightshoulder', 'rightarm', 'rightforearm', 'righthand'],
+    ['hips', 'leftupleg', 'leftleg', 'leftfoot', 'lefttoebase'],
+    ['hips', 'rightupleg', 'rightleg', 'rightfoot', 'righttoebase'],
+  ]
+  const lines: Vector3[][] = []
+
+  for (const chain of chains) {
+    let previous = findGhostBonePosition(bonePositions, chain[0])
+    for (const bone of chain.slice(1)) {
+      const current = findGhostBonePosition(bonePositions, bone)
+      if (previous && current && Vector3.Distance(previous, current) > 0.001) {
+        lines.push([previous, current])
+      }
+
+      previous = current ?? previous
+    }
+  }
+
+  return lines
+}
+
+function findGhostBonePosition(bonePositions: Map<string, Vector3>, boneKey: string) {
+  const normalizedBoneKey = normalizeGhostBoneName(boneKey)
+  for (const [name, position] of bonePositions.entries()) {
+    if (name.endsWith(normalizedBoneKey) || name.includes(normalizedBoneKey)) {
+      return position
+    }
+  }
+
+  return null
+}
+
+function normalizeGhostBoneName(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
 function isMainGhostBone(boneName: string) {

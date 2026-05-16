@@ -1062,8 +1062,8 @@
   grid-template-columns: 18px minmax(0, 1fr) 44px 52px;
   align-items: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 7px;
+  min-height: 38px;
+  padding: 4px 7px;
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-1);
@@ -1101,6 +1101,14 @@
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.sampling-match-breakdown {
+  grid-column: 2 / -1;
+  color: var(--text-2);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
 }
 
 .mini-action {
