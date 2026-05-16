@@ -185,6 +185,32 @@ public sealed class BackendApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DeleteCharacterRemovesCharacterFilesAndWorkspaceReference()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        await client.PostAsync("/api/v1/workspaces/browser", content: null);
+
+        using var characterForm = new MultipartFormDataContent();
+        characterForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("fake fbx bytes")), "visual", "IyoMixamo.fbx");
+
+        var characterResponse = await client.PostAsync("/api/v1/workspaces/browser/characters", characterForm);
+        characterResponse.EnsureSuccessStatusCode();
+        using var characterJson = JsonDocument.Parse(await characterResponse.Content.ReadAsStringAsync());
+        var characterId = characterJson.RootElement.GetProperty("id").GetString();
+
+        var deleteResponse = await client.DeleteAsync($"/api/v1/workspaces/browser/characters/{characterId}");
+        var deleteJson = await deleteResponse.Content.ReadAsStringAsync();
+
+        deleteResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"characters\":[]", deleteJson);
+        Assert.False(Directory.Exists(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo")));
+
+        var workspaceJson = await File.ReadAllTextAsync(Path.Combine(_workspaceRoot, "workspace.json"));
+        Assert.DoesNotContain("IyoMixamo", workspaceJson);
+    }
+
+    [Fact]
     public async Task UpdateClipSettingsPersistsRoleTagsAndBuildInclusion()
     {
         await using var factory = CreateFactory();
@@ -222,14 +248,14 @@ public sealed class BackendApiTests : IAsyncLifetime
         settingsResponse.EnsureSuccessStatusCode();
         Assert.Contains("\"includeInBuild\":false", settingsJson);
         Assert.Contains("\"mirrorInBuild\":true", settingsJson);
-        Assert.Contains("\"clipRole\":\"stop\"", settingsJson);
+        Assert.Contains("\"clipRole\":null", settingsJson);
         Assert.Contains("\"contactDetectionPreset\":\"strict\"", settingsJson);
         Assert.Contains("\"tags\":[\"custom_tag\",\"loop\",\"run\"]", settingsJson);
 
         var persistedClipJson = await File.ReadAllTextAsync(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "Clips", "RunForward", "clip.json"));
         Assert.Contains("\"includeInBuild\": false", persistedClipJson);
         Assert.Contains("\"mirrorInBuild\": true", persistedClipJson);
-        Assert.Contains("\"clipRole\": \"stop\"", persistedClipJson);
+        Assert.DoesNotContain("\"clipRole\"", persistedClipJson);
         Assert.Contains("\"contactDetectionPreset\": \"strict\"", persistedClipJson);
         Assert.Contains("\"custom_tag\"", persistedClipJson);
         Assert.DoesNotContain(_workspaceRoot, persistedClipJson);
@@ -245,7 +271,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"sourceFileName\":\"StopForward.bvh\"", replacementJson);
         Assert.Contains("\"includeInBuild\":false", replacementJson);
         Assert.Contains("\"mirrorInBuild\":true", replacementJson);
-        Assert.Contains("\"clipRole\":\"stop\"", replacementJson);
+        Assert.Contains("\"clipRole\":null", replacementJson);
         Assert.Contains("\"contactDetectionPreset\":\"strict\"", replacementJson);
 
         persistedClipJson = await File.ReadAllTextAsync(Path.Combine(_workspaceRoot, "Characters", "IyoMixamo", "Clips", "RunForward", "clip.json"));
@@ -253,6 +279,148 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"frameCount\": 12", persistedClipJson);
         Assert.Contains("\"includeInBuild\": false", persistedClipJson);
         Assert.Contains("\"mirrorInBuild\": true", persistedClipJson);
+    }
+
+    [Fact]
+    public async Task CharacterResponseIncludesBuildReadinessPlan()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        await client.PostAsync("/api/v1/workspaces/browser", content: null);
+
+        using var characterForm = new MultipartFormDataContent();
+        characterForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("fake fbx bytes")), "visual", "IyoMixamo.fbx");
+
+        var characterResponse = await client.PostAsync("/api/v1/workspaces/browser/characters", characterForm);
+        characterResponse.EnsureSuccessStatusCode();
+        using var characterJson = JsonDocument.Parse(await characterResponse.Content.ReadAsStringAsync());
+        var characterId = characterJson.RootElement.GetProperty("id").GetString();
+
+        using var clipForm = new MultipartFormDataContent();
+        clipForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("HIERARCHY\nROOT Hips\nMOTION\nFrames: 42\nFrame Time: 0.0333333\n")), "clip", "RunForward.bvh");
+
+        var clipResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/clips", clipForm);
+        clipResponse.EnsureSuccessStatusCode();
+        using var clipJson = JsonDocument.Parse(await clipResponse.Content.ReadAsStringAsync());
+        var clipId = clipJson.RootElement.GetProperty("clips")[0].GetProperty("id").GetString();
+
+        var settingsResponse = await client.PatchAsJsonAsync(
+            $"/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/settings",
+            new
+            {
+                includeInBuild = true,
+                mirrorInBuild = true,
+                clipRole = "run_loop",
+                contactDetectionPreset = "auto",
+                tags = Array.Empty<string>()
+            });
+        var settingsJson = await settingsResponse.Content.ReadAsStringAsync();
+
+        settingsResponse.EnsureSuccessStatusCode();
+        using var responseJson = JsonDocument.Parse(settingsJson);
+        var readiness = responseJson.RootElement.GetProperty("buildReadiness");
+
+        Assert.Equal(1, readiness.GetProperty("includedClipCount").GetInt32());
+        Assert.Equal(1, readiness.GetProperty("mirroredCopyCount").GetInt32());
+        Assert.Equal(2, readiness.GetProperty("plannedClipCount").GetInt32());
+        Assert.Contains(readiness.GetProperty("planEntries").EnumerateArray(), entry =>
+            entry.GetProperty("clipName").GetString() == "RunForward Mirror" &&
+            entry.GetProperty("isMirrored").GetBoolean());
+        Assert.Contains(readiness.GetProperty("roles").EnumerateArray(), role =>
+            role.GetProperty("role").GetString() == "run_loop" &&
+            role.GetProperty("includedClipCount").GetInt32() == 1);
+        Assert.Contains(readiness.GetProperty("skeletonCoverage").EnumerateArray(), item =>
+            item.GetProperty("clipName").GetString() == "RunForward" &&
+            item.GetProperty("status").GetString() == "ok");
+        Assert.Contains(readiness.GetProperty("footContacts").EnumerateArray(), item =>
+            item.GetProperty("clipName").GetString() == "RunForward" &&
+            item.GetProperty("hasContacts").GetBoolean() == false);
+    }
+
+    [Fact]
+    public async Task GenerateBuildReportWritesPortableReport()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        await client.PostAsync("/api/v1/workspaces/browser", content: null);
+
+        using var characterForm = new MultipartFormDataContent();
+        characterForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("fake fbx bytes")), "visual", "IyoMixamo.fbx");
+
+        var characterResponse = await client.PostAsync("/api/v1/workspaces/browser/characters", characterForm);
+        characterResponse.EnsureSuccessStatusCode();
+        using var characterJson = JsonDocument.Parse(await characterResponse.Content.ReadAsStringAsync());
+        var characterId = characterJson.RootElement.GetProperty("id").GetString();
+
+        using var clipForm = new MultipartFormDataContent();
+        clipForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("HIERARCHY\nROOT Hips\nMOTION\nFrames: 42\nFrame Time: 0.0333333\n")), "clip", "RunForward.bvh");
+
+        var clipResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/clips", clipForm);
+        clipResponse.EnsureSuccessStatusCode();
+        using var clipJson = JsonDocument.Parse(await clipResponse.Content.ReadAsStringAsync());
+        var clipId = clipJson.RootElement.GetProperty("clips")[0].GetProperty("id").GetString();
+
+        var settingsResponse = await client.PatchAsJsonAsync(
+            $"/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/settings",
+            new
+            {
+                includeInBuild = true,
+                mirrorInBuild = true,
+                clipRole = "run_loop",
+                contactDetectionPreset = "auto",
+                tags = Array.Empty<string>()
+            });
+        settingsResponse.EnsureSuccessStatusCode();
+
+        var reportResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/build-report", content: null);
+        var reportJson = await reportResponse.Content.ReadAsStringAsync();
+
+        reportResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"reportPath\":\"Builds/IyoMixamo/build-report.json\"", reportJson);
+        Assert.Contains("\"readinessFingerprint\":", reportJson);
+        Assert.Contains("\"plannedClipCount\":2", reportJson);
+
+        var readReportResponse = await client.GetAsync($"/api/v1/workspaces/browser/characters/{characterId}/build-report");
+        var readReportJson = await readReportResponse.Content.ReadAsStringAsync();
+
+        readReportResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"reportPath\":\"Builds/IyoMixamo/build-report.json\"", readReportJson);
+        Assert.Contains("\"plannedClipCount\":2", readReportJson);
+
+        var workspaceResponse = await client.GetAsync("/api/v1/workspaces/browser");
+        var workspaceJson = await workspaceResponse.Content.ReadAsStringAsync();
+
+        workspaceResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"buildReportPath\":\"Builds/IyoMixamo/build-report.json\"", workspaceJson);
+        Assert.Contains("\"buildReportStatus\":\"current\"", workspaceJson);
+
+        var updateResponse = await client.PatchAsJsonAsync(
+            $"/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/settings",
+            new
+            {
+                includeInBuild = true,
+                mirrorInBuild = false,
+                clipRole = "run_loop",
+                contactDetectionPreset = "auto",
+                tags = Array.Empty<string>()
+            });
+        updateResponse.EnsureSuccessStatusCode();
+
+        workspaceResponse = await client.GetAsync("/api/v1/workspaces/browser");
+        workspaceJson = await workspaceResponse.Content.ReadAsStringAsync();
+
+        workspaceResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"buildReportStatus\":\"outdated\"", workspaceJson);
+
+        var reportPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "build-report.json");
+        Assert.True(File.Exists(reportPath));
+
+        var persistedReportJson = await File.ReadAllTextAsync(reportPath);
+        Assert.Contains("\"characterName\": \"IyoMixamo\"", persistedReportJson);
+        Assert.Contains("\"reportPath\": \"Builds/IyoMixamo/build-report.json\"", persistedReportJson);
+        Assert.Contains("\"plannedClipCount\": 2", persistedReportJson);
+        Assert.DoesNotContain(_workspaceRoot, persistedReportJson);
+        Assert.DoesNotContain(Path.GetTempPath(), persistedReportJson);
     }
 
     [Fact]

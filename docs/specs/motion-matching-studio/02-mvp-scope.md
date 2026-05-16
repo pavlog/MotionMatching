@@ -145,6 +145,10 @@ run and jump with the current character
 - Optional external export to Unity-compatible `MMDatabases` root.
 - External database export overwrites existing generated database files atomically where practical.
 - Build report includes exact feature layout/settings for manual Unity `MotionMatchingData` setup.
+- Before full database output lands, the character inspector shows a first Build Plan report: included source clips, build-time mirrored entries, role coverage, skeleton coverage per included clip, foot contact present/missing status, and build readiness warnings/errors.
+- `Generate Build Report` writes the current first build plan to `Builds/<CharacterName>/build-report.json`; this is a report artifact only, not the runtime database.
+- Saved build reports remain viewable after browser reload through the character inspector.
+- Saved build reports show `none/current/outdated` status based on a readiness fingerprint.
 - Build runs in background.
 - Dirty/outdated database warning strip in Play Mode.
 - UI build is per character; workspace-level Build All and CLI build are not required for the MVP vertical slice.
@@ -224,8 +228,6 @@ Each clip can have one `clipRole`:
 - `idle_loop`
 - `walk_loop`
 - `run_loop`
-- `start`
-- `stop`
 - `turn_left`
 - `turn_right`
 - `turn_left_180`
@@ -258,7 +260,7 @@ Default global tags:
 - `stealth`
 - `relaxed`
 
-Tags describe style, mood, performance variant, or authoring context. Action categories such as walk, run, turn, start, stop, and jump belong in `clipRole`, not tags. Users can add custom tags to the character vocabulary.
+Tags describe style, mood, performance variant, or authoring context. Action categories such as walk, run, turn, jump, fall, and land belong in `clipRole`, not tags. Start/stop are transition phases/events, not active MVP roles. Users can add custom tags to the character vocabulary.
 
 ## MVP Validation
 

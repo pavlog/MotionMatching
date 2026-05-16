@@ -15,6 +15,9 @@ export interface CharacterResponse {
   clips: ClipResponse[]
   previewUrl: string | null
   validation: ValidationResponse | null
+  buildReadiness: BuildReadinessResponse
+  buildReportPath: string | null
+  buildReportStatus: BuildReportStatus
   importLog: ImportLogEntryResponse[]
 }
 
@@ -91,6 +94,70 @@ export interface SkeletonValidationResponse {
   visualOnlyBones: string[]
   clipOnlyBones: string[]
 }
+
+export interface BuildReadinessResponse {
+  includedClipCount: number
+  mirroredCopyCount: number
+  plannedClipCount: number
+  warningCount: number
+  errorCount: number
+  roles: BuildRoleCoverageResponse[]
+  planEntries: BuildPlanEntryResponse[]
+  skeletonCoverage: BuildSkeletonCoverageResponse[]
+  footContacts: BuildFootContactCoverageResponse[]
+  findings: BuildReadinessFindingResponse[]
+}
+
+export interface BuildRoleCoverageResponse {
+  role: string
+  description: string
+  isRequired: boolean
+  includedClipCount: number
+}
+
+export interface BuildPlanEntryResponse {
+  clipId: string
+  clipName: string
+  clipRole: string | null
+  isMirrored: boolean
+}
+
+export interface BuildSkeletonCoverageResponse {
+  clipId: string
+  clipName: string
+  coverage: number | null
+  matchedBoneCount: number | null
+  visualBoneCount: number | null
+  status: 'ok' | 'warning' | 'error' | 'missing'
+}
+
+export interface BuildFootContactCoverageResponse {
+  clipId: string
+  clipName: string
+  hasContacts: boolean
+  rangeCount: number
+  presentFeet: string[]
+  missingFeet: string[]
+}
+
+export interface BuildReadinessFindingResponse {
+  severity: 'info' | 'warning' | 'error'
+  code: string
+  message: string
+  clipId: string | null
+  clipName: string | null
+}
+
+export interface BuildReportResponse {
+  characterId: string
+  characterName: string
+  reportPath: string
+  generatedAtUtc: string
+  readinessFingerprint: string
+  buildReadiness: BuildReadinessResponse
+}
+
+export type BuildReportStatus = 'none' | 'current' | 'outdated'
 
 export interface ImportLogEntryResponse {
   level: 'info' | 'warning' | 'error'
@@ -207,6 +274,52 @@ export async function deleteClip(characterId: string, clipId: string): Promise<C
 
   if (!response.ok) {
     throw new Error(`Clip delete failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function deleteCharacter(characterId: string): Promise<WorkspaceResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}`, {
+    method: 'DELETE',
+  })
+
+  if (response.status === 404) {
+    throw new Error('Character was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Character delete failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function generateBuildReport(characterId: string): Promise<BuildReportResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/build-report`, {
+    method: 'POST',
+  })
+
+  if (response.status === 404) {
+    throw new Error('Character was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Build report generation failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function getBuildReport(characterId: string): Promise<BuildReportResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/build-report`)
+
+  if (response.status === 404) {
+    throw new Error('Build report was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Build report load failed: ${response.status}`)
   }
 
   return response.json()

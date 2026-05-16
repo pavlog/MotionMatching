@@ -283,6 +283,7 @@ MyMotionWorkspace/
 - Replacing clip source overwrites the managed clip source file.
 - Replacement preserves clip ID, clip name, tags, settings, and include flag.
 - Clip source replacement is exposed from the clip inspector as `Replace Source`. It accepts FBX/BVH, clears derived clip cache, reparses timeline metadata, regenerates preview/diagnostics on demand, and preserves include/mirror/contact preset/role/tag settings.
+- Character rows expose a context-menu delete action. Deleting a character removes the workspace reference and the character folder, including clips and derived caches, after explicit confirmation.
 - If extension changes, the managed source filename extension updates.
 - Timeline/range tags transfer by frame number.
 - There is no built-in source revision history in MVP.
@@ -425,7 +426,7 @@ After clip reprocess/replacement:
 
 - Timeline/range tags transfer by frame number.
 - Out-of-range tags produce warnings.
-- `clipRole` is preserved.
+- `clipRole` is preserved after normalization; retired legacy roles such as `start`/`stop` become unassigned.
 - Global tags are preserved.
 - Auto suggestions may be recalculated, but accepted/manual user choices must not be overwritten silently.
 
@@ -446,6 +447,12 @@ After clip reprocess/replacement:
 - New imported clips default to `includeInBuild = true`.
 - Included clips with `Error` findings block build until fixed or excluded.
 - Clips can opt into `mirrorInBuild`, shown in UI as `Add mirrored copy`. This is a build-time augmentation flag: build planning expands one included source clip into an original entry plus a mirrored entry. It is not a tag and does not create a second imported clip in the authoring tree.
+- Character inspector shows a read-only Build Readiness panel before full database building exists. It lists included clips, planned mirrored copies, role coverage, warning/error counts, and the exact findings that would affect build readiness.
+- First Build Plan is a report, not a runtime database artifact: it expands included clips into source/mirrored entries and summarizes role coverage, skeleton coverage, and foot contact presence/missing status.
+- Build Readiness findings and Build Plan rows that refer to a clip are clickable and select that clip in the editor. Later frame-specific findings can extend this behavior by also seeking the timeline.
+- `Generate Build Report` writes the current first build plan to `Builds/<CharacterName>/build-report.json`. This is a derived workspace artifact and does not produce runtime database files yet.
+- Existing build reports are discoverable from the character response as `buildReportPath`; `View Report` can load the saved JSON after a browser reload.
+- Build reports store a readiness fingerprint. Character response exposes `buildReportStatus` as `none`, `current`, or `outdated` by comparing the saved fingerprint with the current Build Readiness plan.
 - Clip rows and inspectors show validation state using colors and icons for errors/warnings.
 - Left panel rows show aggregate validation badges.
 - Character rows show highest severity and counts across visual import, included clips, and build readiness.
@@ -487,7 +494,7 @@ Bone length mismatch policy:
 - Add Tag expands the character vocabulary.
 - Tags help filtering, search, and authoring metadata.
 - Tags describe style, mood, performance variant, or context such as calm, happy, angry, tired, injured, combat, stealth, relaxed.
-- Tags must not duplicate `clipRole` semantics such as walk/run/turn/start/stop. Those belong in the controlled role vocabulary.
+- Tags must not duplicate action semantics such as walk/run/turn/start/stop. Walk/run/turn/jump/fall/land belong in the controlled role vocabulary; starts/stops are treated as motion phases/events rather than standalone MVP roles.
 - The clip inspector includes a helper to clear legacy action tags (`idle`, `walk`, `run`, `turn`, `start`, `stop`, `jump`, `loop`) from existing clips after the role/tag split.
 - `disabled` is not part of the default semantic tag vocabulary.
 
@@ -504,7 +511,7 @@ Default global tags for MVP:
 - `stealth`
 - `relaxed`
 
-No generic `transition` tag in MVP. Action categories such as start, stop, turn, jump, walk, and run should be represented by `clipRole`, not tags.
+No generic `transition` tag in MVP. Action categories such as turn, jump, walk, run, fall, and land should be represented by `clipRole`, not tags. Start/stop are transition phases/events, not active roles.
 
 Clip role is separate from tags:
 
@@ -515,9 +522,9 @@ Clip role is separate from tags:
 - For example, pressing jump chooses/searches within the appropriate jump role subset rather than searching the whole database blindly.
 - Ground locomotion also uses role-constrained state transitions/search:
   - No input uses `idle_loop`.
-  - Run input uses `start`/`run_loop`.
-  - Shift-walk input uses `start`/`walk_loop`.
-  - Release input uses `stop`.
+  - Run input uses `run_loop`.
+  - Shift-walk input uses `walk_loop`.
+  - Starting/stopping are detected from trajectory/phase timing rather than separate `clipRole` values.
   - 180-degree turn input uses turn roles where applicable.
 
 MVP turn testing focuses on 180-degree turns:
@@ -545,8 +552,6 @@ MVP `clipRole` vocabulary:
 - `idle_loop`
 - `walk_loop`
 - `run_loop`
-- `start`
-- `stop`
 - `turn_left`
 - `turn_right`
 - `turn_left_180`
@@ -555,7 +560,7 @@ MVP `clipRole` vocabulary:
 - `fall_loop`
 - `land`
 
-Legacy role tokens from earlier experiments are normalized on save/load where possible: `walk_start`/`run_start` -> `start`, `walk_stop`/`run_stop` -> `stop`, `turn_180`/`run_turn_180` -> `turn_right_180`, jump variants -> `jump`, and land variants -> `land`.
+Legacy role tokens from earlier experiments are normalized on save/load where possible: `start`/`stop` and old walk/run start/stop variants -> unassigned, `turn_180`/`run_turn_180` -> `turn_right_180`, jump variants -> `jump`, and land variants -> `land`.
 
 Auto-detection should suggest both global tags and `clipRole`; the user can override `clipRole` with a combobox.
 
@@ -673,8 +678,6 @@ Required MVP roles for full Play Mode readiness:
 - `idle_loop`
 - `walk_loop`
 - `run_loop`
-- `start`
-- `stop`
 - `turn_left`
 - `turn_right`
 - `turn_left_180`

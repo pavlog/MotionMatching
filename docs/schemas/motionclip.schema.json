@@ -89,8 +89,6 @@
         "idle_loop",
         "walk_loop",
         "run_loop",
-        "start",
-        "stop",
         "turn_left",
         "turn_right",
         "turn_left_180",
@@ -102,7 +100,7 @@
     },
     "tags": {
       "type": "array",
-      "description": "Style, mood, or authoring metadata such as calm, happy, angry, tired, injured, combat, or stealth. Do not duplicate clipRole semantics such as walk/run/turn/start/stop.",
+      "description": "Style, mood, or authoring metadata such as calm, happy, angry, tired, injured, combat, or stealth. Do not duplicate role/action semantics such as walk, run, turn, jump, fall, land, start, or stop.",
       "items": {
         "type": "string"
       }

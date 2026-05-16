@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Box as BoxIcon, CheckCircle2, CirclePlus, FileText, Film, ListTree, Loader2, Pause, Play, RefreshCw, StepBack, StepForward, TerminalSquare, Trash2, TriangleAlert } from 'lucide-react'
+import { AlertCircle, Box as BoxIcon, CheckCircle2, CirclePlus, FileText, Film, ListTree, Loader2, Pause, Play, RefreshCw, StepBack, StepForward, TerminalSquare, Trash2, TriangleAlert, X } from 'lucide-react'
 import {
   type ClipResponse,
+  type BuildReportResponse,
   type CharacterResponse,
   type ContactDetectionPreset,
   type WorkspaceResponse,
   createBrowserWorkspace,
+  deleteCharacter,
   deleteClip,
+  generateBuildReport,
+  getBuildReport,
   openBrowserWorkspace,
   refreshFootContacts,
   replaceClipSource,
@@ -36,6 +40,19 @@ type ClipContextMenu = {
   y: number
 }
 
+type CharacterContextMenu = {
+  characterId: string
+  characterName: string
+  x: number
+  y: number
+}
+
+type TextViewer = {
+  heading: string
+  title: string
+  text: string
+}
+
 const fallbackFrameCount = 120
 const fallbackFrameRate = 24
 type ClipMotionMode = 'inPlace' | 'rootMotion'
@@ -44,8 +61,6 @@ const clipRoles = [
   { value: 'idle_loop', description: 'no movement input' },
   { value: 'walk_loop', description: 'moving slowly' },
   { value: 'run_loop', description: 'moving fast' },
-  { value: 'start', description: 'beginning movement' },
-  { value: 'stop', description: 'ending movement' },
   { value: 'turn_left', description: 'committed left turn' },
   { value: 'turn_right', description: 'committed right turn' },
   { value: 'turn_left_180', description: 'reversing left' },
@@ -82,6 +97,9 @@ function App() {
   const [animationPreviewState, setAnimationPreviewState] = useState('none')
   const [clipMotionMode, setClipMotionMode] = useState<ClipMotionMode>('inPlace')
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenu | null>(null)
+  const [characterContextMenu, setCharacterContextMenu] = useState<CharacterContextMenu | null>(null)
+  const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
+  const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([
     { id: 1, level: 'info', message: 'Ready' },
   ])
@@ -163,6 +181,7 @@ function App() {
   const openClipContextMenu = useCallback((event: React.MouseEvent, characterId: string, clip: ClipResponse) => {
     event.preventDefault()
     selectClip(characterId, clip.id)
+    setCharacterContextMenu(null)
     setClipContextMenu({
       characterId,
       clipId: clip.id,
@@ -171,6 +190,18 @@ function App() {
       y: event.clientY,
     })
   }, [selectClip])
+
+  const openCharacterContextMenu = useCallback((event: React.MouseEvent, character: CharacterResponse) => {
+    event.preventDefault()
+    selectCharacter(character.id)
+    setClipContextMenu(null)
+    setCharacterContextMenu({
+      characterId: character.id,
+      characterName: character.name,
+      x: event.clientX,
+      y: event.clientY,
+    })
+  }, [selectCharacter])
 
   useEffect(() => {
     if (!isTimelinePlaying || !selectedClip || maxTimelineFrame <= 0) {
@@ -235,14 +266,17 @@ function App() {
   }, [maxTimelineFrame, selectedClip, stepTimeline])
 
   useEffect(() => {
-    if (!clipContextMenu) {
+    if (!clipContextMenu && !characterContextMenu) {
       return
     }
 
-    const closeMenu = () => setClipContextMenu(null)
+    const closeMenu = () => {
+      setClipContextMenu(null)
+      setCharacterContextMenu(null)
+    }
     const closeMenuOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setClipContextMenu(null)
+        closeMenu()
       }
     }
 
@@ -254,7 +288,7 @@ function App() {
       window.removeEventListener('resize', closeMenu)
       window.removeEventListener('keydown', closeMenuOnEscape)
     }
-  }, [clipContextMenu])
+  }, [characterContextMenu, clipContextMenu])
 
   useEffect(() => {
     let cancelled = false
@@ -419,6 +453,38 @@ function App() {
     }
   }
 
+  async function handleDeleteCharacter(characterId: string) {
+    const character = workspace?.characters.find((item) => item.id === characterId)
+    if (!character) {
+      return
+    }
+
+    setCharacterContextMenu(null)
+    if (!window.confirm(`Delete character "${character.name}" and all of its clips?`)) {
+      return
+    }
+
+    setIsBusy(true)
+    appendLog(`Deleting ${character.name}`)
+    try {
+      const updatedWorkspace = await deleteCharacter(characterId)
+      setWorkspace(updatedWorkspace)
+      const nextCharacter = updatedWorkspace.characters[0]
+      if (nextCharacter) {
+        selectCharacter(nextCharacter.id)
+      } else {
+        setSelection(null)
+        resetTimeline()
+      }
+
+      appendLog(`Deleted ${character.name}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Character delete failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   async function handleUpdateClipSettings(
     characterId: string,
     clip: ClipResponse,
@@ -470,6 +536,65 @@ function App() {
     } finally {
       setIsBusy(false)
     }
+  }
+
+  async function handleGenerateBuildReport(character: CharacterResponse) {
+    setIsBusy(true)
+    appendLog(`Generating build report for ${character.name}`)
+    try {
+      const report = await generateBuildReport(character.id)
+      setLastBuildReport(report)
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((item) =>
+              item.id === character.id ? { ...item, buildReportPath: report.reportPath, buildReportStatus: 'current' } : item,
+            ),
+          }
+        : currentWorkspace)
+      appendLog(`Build report generated: ${report.reportPath} (${report.buildReadiness.warningCount} warnings, ${report.buildReadiness.errorCount} errors)`, report.buildReadiness.errorCount > 0 ? 'error' : report.buildReadiness.warningCount > 0 ? 'warning' : 'info')
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Build report generation failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function handleViewBuildReport(character: CharacterResponse) {
+    const cachedReport = lastBuildReport?.characterId === character.id ? lastBuildReport : null
+    if (cachedReport) {
+      openBuildReportViewer(cachedReport)
+      return
+    }
+
+    setIsBusy(true)
+    appendLog(`Loading build report for ${character.name}`)
+    try {
+      const report = await getBuildReport(character.id)
+      setLastBuildReport(report)
+      openBuildReportViewer(report)
+      appendLog(`Opened build report: ${report.reportPath}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Build report load failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  function openBuildReportViewer(report: BuildReportResponse) {
+    setTextViewer({
+      heading: 'Build Report',
+      title: report.reportPath,
+      text: JSON.stringify(report, null, 2),
+    })
+  }
+
+  function openLogViewer() {
+    setTextViewer({
+      heading: 'Log',
+      title: 'Recent messages',
+      text: logs.map((entry) => `[${entry.level.toUpperCase()}] ${entry.message}`).join('\n'),
+    })
   }
 
   return (
@@ -543,6 +668,7 @@ function App() {
                   type="button"
                   className={`tree-item ${selection?.type === 'character' && character.id === selection.characterId ? 'selected' : ''}`}
                   onClick={() => selectCharacter(character.id)}
+                  onContextMenu={(event) => openCharacterContextMenu(event, character)}
                 >
                   {validationIcon(character)}
                   <span>{character.name}</span>
@@ -600,7 +726,15 @@ function App() {
             onReplaceSource={() => replaceClipInputRef.current?.click()}
           />
         ) : selectedCharacter ? (
-          <CharacterInspector character={selectedCharacter} />
+          <CharacterInspector
+            character={selectedCharacter}
+            isBusy={isBusy}
+            lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
+            hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
+            onGenerateBuildReport={() => handleGenerateBuildReport(selectedCharacter)}
+            onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
+            onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
+          />
         ) : (
           <div className="inspector-empty">
             Select a character or imported asset.
@@ -634,14 +768,14 @@ function App() {
             }}
           />
         ) : null}
-        <div className="log-strip">
+        <button type="button" className="log-strip" onClick={openLogViewer} title="Open log">
           <TerminalSquare size={15} aria-hidden="true" />
           <div className="log-lines">
             <span className={`log-line ${latestLog?.level ?? 'info'}`}>
               {latestLog?.message ?? 'Ready'}
             </span>
           </div>
-        </div>
+        </button>
       </section>
       {clipContextMenu ? (
         <div
@@ -663,7 +797,81 @@ function App() {
           </button>
         </div>
       ) : null}
+      {characterContextMenu ? (
+        <div
+          className="context-menu"
+          style={{ left: characterContextMenu.x, top: characterContextMenu.y }}
+          role="menu"
+          aria-label={`Character actions for ${characterContextMenu.characterName}`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="context-menu-item danger"
+            role="menuitem"
+            disabled={isBusy}
+            onClick={() => handleDeleteCharacter(characterContextMenu.characterId)}
+          >
+            <Trash2 size={14} aria-hidden="true" />
+            Delete Character
+          </button>
+        </div>
+      ) : null}
+      {textViewer ? (
+        <TextModal
+          heading={textViewer.heading}
+          title={textViewer.title}
+          text={textViewer.text}
+          onClose={() => setTextViewer(null)}
+        />
+      ) : null}
     </main>
+  )
+}
+
+function TextModal({
+  heading,
+  title,
+  text,
+  onClose,
+}: {
+  heading: string
+  title: string
+  text: string
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [onClose])
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="report-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={heading}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="report-modal-header">
+          <div>
+            <h2>{heading}</h2>
+            <span>{title}</span>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label={`Close ${heading.toLowerCase()}`}>
+            <X size={15} aria-hidden="true" />
+          </button>
+        </header>
+        <pre className="report-modal-text">{text}</pre>
+      </section>
+    </div>
   )
 }
 
@@ -1268,7 +1476,157 @@ function formatBoneList(values: string[]) {
   return values.length ? values.join(', ') : '--'
 }
 
-function CharacterInspector({ character }: { character: CharacterResponse }) {
+function formatBuildReportStatus(status: CharacterResponse['buildReportStatus']) {
+  if (status === 'current') {
+    return 'Report current'
+  }
+
+  if (status === 'outdated') {
+    return 'Report outdated'
+  }
+
+  return 'No report'
+}
+
+function BuildReadinessPanel({
+  character,
+  onSelectClip,
+}: {
+  character: CharacterResponse
+  onSelectClip: (clipId: string) => void
+}) {
+  const readiness = character.buildReadiness
+  const presentRoles = readiness.roles.filter((role) => role.includedClipCount > 0)
+  const missingRoles = readiness.roles.filter((role) => role.isRequired && role.includedClipCount === 0)
+  const blocking = readiness.errorCount > 0
+
+  return (
+    <section className="inspector-section">
+      <h3>Build Readiness</h3>
+      <div className={`validation-summary ${blocking ? 'blocked' : readiness.warningCount > 0 ? 'warn' : 'ok'}`}>
+        {blocking ? <AlertCircle size={16} aria-hidden="true" /> : readiness.warningCount > 0 ? <TriangleAlert size={16} aria-hidden="true" /> : <CheckCircle2 size={16} aria-hidden="true" />}
+        <span>{blocking ? 'Blocked' : readiness.warningCount > 0 ? 'Has warnings' : 'Ready'}</span>
+      </div>
+      <div className="readiness-stats" aria-label="Build readiness counts">
+        <span><strong>{readiness.includedClipCount}</strong> included</span>
+        <span><strong>{readiness.mirroredCopyCount}</strong> mirrored</span>
+        <span><strong>{readiness.plannedClipCount}</strong> planned</span>
+        <span><strong>{readiness.warningCount}</strong> warnings</span>
+        <span><strong>{readiness.errorCount}</strong> errors</span>
+      </div>
+      <div className="role-coverage" aria-label="Role coverage">
+        {readiness.roles.map((role) => (
+          <span key={role.role} className={`role-pill ${role.includedClipCount > 0 ? 'present' : 'missing'}`} title={role.description}>
+            {role.role}
+            {role.includedClipCount > 0 ? ` ${role.includedClipCount}` : ''}
+          </span>
+        ))}
+      </div>
+      <dl>
+        <dt>Present</dt>
+        <dd>{presentRoles.length ? presentRoles.map((role) => role.role).join(', ') : 'None'}</dd>
+        <dt>Missing</dt>
+        <dd>{missingRoles.length ? missingRoles.map((role) => role.role).join(', ') : 'None'}</dd>
+      </dl>
+      <div className="finding-list">
+        {readiness.findings.slice(0, 6).map((finding, index) => finding.clipId ? (
+          <button
+            key={`${finding.severity}-${finding.code}-${finding.clipId}-${index}`}
+            type="button"
+            className={`finding finding-action ${finding.severity}`}
+            onClick={() => onSelectClip(finding.clipId!)}
+          >
+            <strong>{finding.clipName ? `${finding.clipName}: ${finding.code}` : finding.code}</strong>
+            <span>{finding.message}</span>
+          </button>
+        ) : (
+          <div key={`${finding.severity}-${finding.code}-character-${index}`} className={`finding ${finding.severity}`}>
+            <strong>{finding.code}</strong>
+            <span>{finding.message}</span>
+          </div>
+        ))}
+        {readiness.findings.length > 6 ? (
+          <p className="muted">{readiness.findings.length - 6} more finding(s)</p>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+function BuildPlanPanel({
+  character,
+  onSelectClip,
+}: {
+  character: CharacterResponse
+  onSelectClip: (clipId: string) => void
+}) {
+  const readiness = character.buildReadiness
+
+  return (
+    <section className="inspector-section">
+      <h3>Build Plan</h3>
+      {readiness.planEntries.length ? (
+        <div className="build-plan-list">
+          {readiness.planEntries.map((entry) => (
+            <button
+              key={`${entry.clipId}-${entry.isMirrored ? 'mirror' : 'source'}`}
+              type="button"
+              className="build-plan-row"
+              onClick={() => onSelectClip(entry.clipId)}
+            >
+              <span>{entry.clipName}</span>
+              <span>{entry.clipRole ?? 'Unassigned'}{entry.isMirrored ? ' mirror' : ''}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="muted">No included clips</p>
+      )}
+      <div className="build-coverage-list">
+        {readiness.skeletonCoverage.map((item) => (
+          <button
+            key={`skeleton-${item.clipId}`}
+            type="button"
+            className={`coverage-row ${item.status}`}
+            onClick={() => onSelectClip(item.clipId)}
+          >
+            <span>{item.clipName}</span>
+            <span>{item.coverage === null ? 'Skeleton --' : `Skeleton ${Math.round(item.coverage * 100)}%`}</span>
+          </button>
+        ))}
+        {readiness.footContacts.map((item) => (
+          <button
+            key={`contacts-${item.clipId}`}
+            type="button"
+            className={`coverage-row ${item.hasContacts ? 'ok' : 'missing'}`}
+            onClick={() => onSelectClip(item.clipId)}
+          >
+            <span>{item.clipName}</span>
+            <span>{item.hasContacts ? `Contacts ${item.rangeCount}` : 'Contacts missing'}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function CharacterInspector({
+  character,
+  isBusy,
+  hasBuildReport,
+  lastBuildReport,
+  onGenerateBuildReport,
+  onViewBuildReport,
+  onSelectClip,
+}: {
+  character: CharacterResponse
+  isBusy: boolean
+  hasBuildReport: boolean
+  lastBuildReport: BuildReportResponse | null
+  onGenerateBuildReport: () => void
+  onViewBuildReport: () => void
+  onSelectClip: (clipId: string) => void
+}) {
   return (
     <div className="inspector-content">
       <section className="inspector-section">
@@ -1282,10 +1640,33 @@ function CharacterInspector({ character }: { character: CharacterResponse }) {
           <dd>{character.visualManifestPath}</dd>
           <dt>Preview</dt>
           <dd>{character.previewUrl ? 'Ready' : 'Not generated'}</dd>
-          <dt>Clips</dt>
-          <dd>{character.clips?.length ?? 0}</dd>
-        </dl>
+        <dt>Clips</dt>
+        <dd>{character.clips?.length ?? 0}</dd>
+        <dt>Report</dt>
+        <dd>{formatBuildReportStatus(character.buildReportStatus)}</dd>
+      </dl>
+        <button
+          type="button"
+          className="inspector-action"
+          disabled={isBusy}
+          onClick={onGenerateBuildReport}
+        >
+          {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
+          Generate Build Report
+        </button>
+        <button
+          type="button"
+          className={`inspector-action report-status-${character.buildReportStatus}`}
+          disabled={isBusy || !hasBuildReport}
+          onClick={onViewBuildReport}
+          title={formatBuildReportStatus(character.buildReportStatus)}
+        >
+          <FileText size={14} aria-hidden="true" />
+          {lastBuildReport ? 'View Report' : character.buildReportPath ? 'Load Report' : 'View Report'}
+        </button>
       </section>
+      <BuildReadinessPanel character={character} onSelectClip={onSelectClip} />
+      <BuildPlanPanel character={character} onSelectClip={onSelectClip} />
       <section className="inspector-section">
         <h3>Validation</h3>
         {character.validation ? (

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using MotionMatching.Authoring;
@@ -10,28 +12,40 @@ namespace MotionMatching.Studio.Backend.Workspaces;
 public sealed class BrowserWorkspaceService
 {
     private const string WorkspaceFileName = "workspace.json";
-    private static readonly HashSet<string> KnownClipRoles = new(StringComparer.Ordinal)
+    private static readonly IReadOnlyList<ClipRoleDefinition> ClipRoleDefinitions =
+    [
+        new("idle_loop", "no movement input"),
+        new("walk_loop", "moving slowly"),
+        new("run_loop", "moving fast"),
+        new("turn_left", "committed left turn"),
+        new("turn_right", "committed right turn"),
+        new("turn_left_180", "reversing left"),
+        new("turn_right_180", "reversing right"),
+        new("jump", "jump begins"),
+        new("fall_loop", "airborne or falling"),
+        new("land", "landing")
+    ];
+
+    private static readonly HashSet<string> KnownClipRoles = new(
+        ClipRoleDefinitions.Select(role => role.Value),
+        StringComparer.Ordinal);
+
+    private static readonly HashSet<string> RequiredBuildRoles = new(KnownClipRoles, StringComparer.Ordinal);
+
+    private static readonly string[] BuildFootSides =
     {
-        "idle_loop",
-        "walk_loop",
-        "run_loop",
-        "start",
-        "stop",
-        "turn_left",
-        "turn_right",
-        "turn_left_180",
-        "turn_right_180",
-        "jump",
-        "fall_loop",
-        "land"
+        "left",
+        "right"
     };
 
-    private static readonly IReadOnlyDictionary<string, string> LegacyClipRoleAliases = new Dictionary<string, string>(StringComparer.Ordinal)
+    private static readonly IReadOnlyDictionary<string, string?> LegacyClipRoleAliases = new Dictionary<string, string?>(StringComparer.Ordinal)
     {
-        ["walk_start"] = "start",
-        ["run_start"] = "start",
-        ["walk_stop"] = "stop",
-        ["run_stop"] = "stop",
+        ["start"] = null,
+        ["stop"] = null,
+        ["walk_start"] = null,
+        ["run_start"] = null,
+        ["walk_stop"] = null,
+        ["run_stop"] = null,
         ["turn_180"] = "turn_right_180",
         ["run_turn_180"] = "turn_right_180",
         ["jump_up"] = "jump",
@@ -174,6 +188,9 @@ public sealed class BrowserWorkspaceService
             [],
             previewUrl,
             ToValidationResponse(validation),
+            BuildReadiness([], ToValidationResponse(validation)),
+            null,
+            "none",
             importLog);
     }
 
@@ -292,6 +309,34 @@ public sealed class BrowserWorkspaceService
         return await ToCharacterResponseAsync(reference, cancellationToken);
     }
 
+    public async Task<WorkspaceResponse> DeleteCharacterAsync(
+        string characterId,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+
+        workspace.Characters.Remove(reference);
+        await WriteManifestAsync(GetWorkspaceManifestPath(), workspace, cancellationToken);
+
+        var charactersRoot = Path.GetFullPath(Path.Combine(GetWorkspaceRoot(), "Characters"));
+        var characterManifestPath = Path.GetFullPath(Path.Combine(GetWorkspaceRoot(), reference.ManifestPath.Replace('/', Path.DirectorySeparatorChar)));
+        var characterRoot = Path.GetDirectoryName(characterManifestPath);
+        if (characterRoot is not null)
+        {
+            var fullCharacterRoot = Path.GetFullPath(characterRoot);
+            if (!fullCharacterRoot.Equals(charactersRoot, StringComparison.OrdinalIgnoreCase) &&
+                fullCharacterRoot.StartsWith(charactersRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                Directory.Exists(fullCharacterRoot))
+            {
+                Directory.Delete(fullCharacterRoot, recursive: true);
+            }
+        }
+
+        return await ToResponseAsync(workspace, cancellationToken);
+    }
+
     public async Task<CharacterResponse> ReplaceClipSourceAsync(
         string characterId,
         string clipId,
@@ -338,7 +383,7 @@ public sealed class BrowserWorkspaceService
                 IncludeInBuild = clip.IncludeInBuild,
                 MirrorInBuild = clip.MirrorInBuild,
                 ContactDetectionPreset = clip.ContactDetectionPreset,
-                ClipRole = clip.ClipRole,
+                ClipRole = NormalizeClipRole(clip.ClipRole),
                 Tags = clip.Tags
             };
 
@@ -362,6 +407,50 @@ public sealed class BrowserWorkspaceService
         }
 
         throw new KeyNotFoundException("Clip was not found.");
+    }
+
+    public async Task<BuildReportResponse> GenerateBuildReportAsync(
+        string characterId,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+
+        var character = await ToCharacterResponseAsync(reference, cancellationToken);
+        var reportPath = GetBuildReportPath(reference);
+        var report = new BuildReportResponse(
+            character.Id,
+            character.Name,
+            reportPath,
+            DateTimeOffset.UtcNow,
+            ComputeReadinessFingerprint(character.BuildReadiness),
+            character.BuildReadiness);
+
+        await WriteManifestAsync(
+            Path.Combine(GetWorkspaceRoot(), reportPath.Replace('/', Path.DirectorySeparatorChar)),
+            report,
+            cancellationToken);
+
+        return report;
+    }
+
+    public async Task<BuildReportResponse> GetBuildReportAsync(
+        string characterId,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+
+        var reportPath = GetBuildReportPath(reference);
+        var fullReportPath = Path.Combine(GetWorkspaceRoot(), reportPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(fullReportPath))
+        {
+            throw new FileNotFoundException("Build report was not found.", fullReportPath);
+        }
+
+        return ManifestJson.Deserialize<BuildReportResponse>(await File.ReadAllTextAsync(fullReportPath, cancellationToken));
     }
 
     private async Task<WorkspaceManifest> EnsureWorkspaceManifestAsync(CancellationToken cancellationToken)
@@ -406,6 +495,10 @@ public sealed class BrowserWorkspaceService
         var clips = await ReadClipResponsesAsync(characterRoot, manifest, cancellationToken);
         var previewUrl = File.Exists(previewPath) ? ToAssetUrl(reference.ManifestPath.Split('/')[0], Path.GetFileName(characterRoot), "Cache", "Preview", "visual.glb") : null;
         var importLog = BuildCharacterImportLog(manifest, validation, previewUrl, clips.Count);
+        var buildReadiness = BuildReadiness(clips, validation);
+        var buildReportPath = GetBuildReportPath(reference);
+        var fullBuildReportPath = Path.Combine(GetWorkspaceRoot(), buildReportPath.Replace('/', Path.DirectorySeparatorChar));
+        var buildReportStatus = GetBuildReportStatus(fullBuildReportPath, buildReadiness);
 
         return new CharacterResponse(
             manifest.Id.Value,
@@ -415,6 +508,9 @@ public sealed class BrowserWorkspaceService
             clips,
             previewUrl,
             validation,
+            buildReadiness,
+            File.Exists(fullBuildReportPath) ? buildReportPath : null,
+            buildReportStatus,
             importLog);
     }
 
@@ -480,6 +576,235 @@ public sealed class BrowserWorkspaceService
         }
 
         return clips;
+    }
+
+    private static BuildReadinessResponse BuildReadiness(
+        IReadOnlyList<ClipResponse> clips,
+        ValidationResponse? characterValidation)
+    {
+        var includedClips = clips.Where(clip => clip.IncludeInBuild).ToArray();
+        var findings = new List<BuildReadinessFindingResponse>();
+
+        if (includedClips.Length == 0)
+        {
+            findings.Add(BuildFinding(
+                "error",
+                "no_included_clips",
+                "Build plan has no included clips.",
+                null));
+        }
+
+        if (characterValidation is null)
+        {
+            findings.Add(BuildFinding(
+                "warning",
+                "visual_validation_missing",
+                "Visual validation has not run.",
+                null));
+        }
+        else
+        {
+            findings.AddRange(characterValidation.Findings.Select(finding => BuildFinding(
+                finding.Severity,
+                $"visual_{finding.Code}",
+                finding.Message,
+                null)));
+        }
+
+        foreach (var clip in includedClips)
+        {
+            if (clip.ClipRole is null)
+            {
+                findings.Add(BuildFinding(
+                    "warning",
+                    "clip_role_missing",
+                    $"{clip.Name} is included but has no role.",
+                    clip));
+            }
+
+            if (clip.Validation is null)
+            {
+                findings.Add(BuildFinding(
+                    "warning",
+                    "clip_validation_missing",
+                    $"{clip.Name} validation has not run.",
+                    clip));
+            }
+            else
+            {
+                findings.AddRange(clip.Validation.Findings.Select(finding => BuildFinding(
+                    finding.Severity,
+                    finding.Code,
+                    finding.Message,
+                    clip)));
+            }
+
+            if (clip.Skeleton is null)
+            {
+                findings.Add(BuildFinding(
+                    "warning",
+                    "skeleton_coverage_missing",
+                    $"{clip.Name} has no skeleton coverage diagnostics.",
+                    clip));
+            }
+
+            var rangeCount = CountFootContactRanges(clip);
+            if (rangeCount == 0)
+            {
+                findings.Add(BuildFinding(
+                    "warning",
+                    "foot_contacts_missing",
+                    $"{clip.Name} has no detected foot contact ranges.",
+                    clip));
+            }
+        }
+
+        var missingRoles = RequiredBuildRoles
+            .Where(role => !includedClips.Any(clip => clip.ClipRole == role))
+            .ToArray();
+        if (missingRoles.Length > 0)
+        {
+            findings.Add(BuildFinding(
+                "warning",
+                "role_coverage_missing",
+                $"Missing included clips for roles: {string.Join(", ", missingRoles)}.",
+                null));
+        }
+
+        var roleCoverage = ClipRoleDefinitions
+            .Select(role => new BuildRoleCoverageResponse(
+                role.Value,
+                role.Description,
+                RequiredBuildRoles.Contains(role.Value),
+                includedClips.Count(clip => clip.ClipRole == role.Value)))
+            .ToArray();
+
+        var planEntries = includedClips
+            .SelectMany(clip =>
+            {
+                var entries = new List<BuildPlanEntryResponse>
+                {
+                    new(clip.Id, clip.Name, clip.ClipRole, false)
+                };
+                if (clip.MirrorInBuild)
+                {
+                    entries.Add(new BuildPlanEntryResponse(clip.Id, $"{clip.Name} Mirror", clip.ClipRole, true));
+                }
+
+                return entries;
+            })
+            .ToArray();
+
+        var skeletonCoverage = includedClips
+            .Select(clip => new BuildSkeletonCoverageResponse(
+                clip.Id,
+                clip.Name,
+                clip.Skeleton?.Coverage,
+                clip.Skeleton?.MatchedBoneCount,
+                clip.Skeleton?.VisualBoneCount,
+                GetSkeletonCoverageStatus(clip)))
+            .ToArray();
+
+        var footContacts = includedClips
+            .Select(clip =>
+            {
+                var presentFeet = clip.FootContacts?.Tracks
+                    .Where(track => track.Ranges.Count > 0)
+                    .Select(track => track.Foot)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray() ?? [];
+                var missingFeet = BuildFootSides
+                    .Where(side => !presentFeet.Contains(side, StringComparer.OrdinalIgnoreCase))
+                    .ToArray();
+
+                return new BuildFootContactCoverageResponse(
+                    clip.Id,
+                    clip.Name,
+                    presentFeet.Length > 0,
+                    CountFootContactRanges(clip),
+                    presentFeet,
+                    missingFeet);
+            })
+            .ToArray();
+
+        return new BuildReadinessResponse(
+            includedClips.Length,
+            includedClips.Count(clip => clip.MirrorInBuild),
+            planEntries.Length,
+            findings.Count(finding => finding.Severity == "warning"),
+            findings.Count(finding => finding.Severity == "error"),
+            roleCoverage,
+            planEntries,
+            skeletonCoverage,
+            footContacts,
+            findings);
+    }
+
+    private static BuildReadinessFindingResponse BuildFinding(
+        string severity,
+        string code,
+        string message,
+        ClipResponse? clip)
+    {
+        return new BuildReadinessFindingResponse(
+            severity,
+            code,
+            message,
+            clip?.Id,
+            clip?.Name);
+    }
+
+    private static int CountFootContactRanges(ClipResponse clip)
+    {
+        return clip.FootContacts?.Tracks.Sum(track => track.Ranges.Count) ?? 0;
+    }
+
+    private static string GetSkeletonCoverageStatus(ClipResponse clip)
+    {
+        if (clip.Skeleton is null)
+        {
+            return "missing";
+        }
+
+        if (clip.Validation?.Findings.Any(finding => finding.Severity == "error" && finding.Code.Contains("skeleton", StringComparison.OrdinalIgnoreCase)) == true)
+        {
+            return "error";
+        }
+
+        if (clip.Validation?.Findings.Any(finding => finding.Severity == "warning" && finding.Code.Contains("skeleton", StringComparison.OrdinalIgnoreCase)) == true)
+        {
+            return "warning";
+        }
+
+        return "ok";
+    }
+
+    private static string GetBuildReportStatus(string fullReportPath, BuildReadinessResponse buildReadiness)
+    {
+        if (!File.Exists(fullReportPath))
+        {
+            return "none";
+        }
+
+        try
+        {
+            var report = ManifestJson.Deserialize<BuildReportResponse>(File.ReadAllText(fullReportPath));
+            return string.Equals(report.ReadinessFingerprint, ComputeReadinessFingerprint(buildReadiness), StringComparison.Ordinal)
+                ? "current"
+                : "outdated";
+        }
+        catch
+        {
+            return "outdated";
+        }
+    }
+
+    private static string ComputeReadinessFingerprint(BuildReadinessResponse buildReadiness)
+    {
+        var json = ManifestJson.Serialize(buildReadiness);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(json));
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     public async Task<CharacterResponse> UpdateClipSettingsAsync(
@@ -858,6 +1183,11 @@ public sealed class BrowserWorkspaceService
         var normalized = NormalizeToken(role);
         if (LegacyClipRoleAliases.TryGetValue(normalized, out var alias))
         {
+            if (alias is null)
+            {
+                return null;
+            }
+
             normalized = alias;
         }
 
@@ -1121,6 +1451,18 @@ public sealed class BrowserWorkspaceService
         return string.Join('/', parts);
     }
 
+    private static string GetCharacterFolderName(CharacterReference reference)
+    {
+        var normalizedPath = reference.ManifestPath.Replace('\\', '/');
+        var parts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? parts[^2] : SanitizeFolderName(reference.Name);
+    }
+
+    private static string GetBuildReportPath(CharacterReference reference)
+    {
+        return ToPortablePath("Builds", GetCharacterFolderName(reference), "build-report.json");
+    }
+
     private static string ToAssetUrl(params string[] parts)
     {
         return "/api/v1/workspaces/browser/assets/" + ToPortablePath(parts);
@@ -1139,4 +1481,8 @@ public sealed class BrowserWorkspaceService
     private sealed record ClipSkeletonValidationResult(
         ValidationResponse Validation,
         SkeletonValidationResponse? Skeleton);
+
+    private sealed record ClipRoleDefinition(
+        string Value,
+        string Description);
 }

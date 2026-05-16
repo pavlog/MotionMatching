@@ -14,6 +14,9 @@ public sealed record CharacterResponse(
     IReadOnlyList<ClipResponse> Clips,
     string? PreviewUrl,
     ValidationResponse? Validation,
+    BuildReadinessResponse BuildReadiness,
+    string? BuildReportPath,
+    string BuildReportStatus,
     IReadOnlyList<ImportLogEntryResponse> ImportLog);
 
 public sealed record ClipResponse(
@@ -81,6 +84,61 @@ public sealed record SkeletonValidationResponse(
     IReadOnlyList<string> MatchedBones,
     IReadOnlyList<string> VisualOnlyBones,
     IReadOnlyList<string> ClipOnlyBones);
+
+public sealed record BuildReadinessResponse(
+    int IncludedClipCount,
+    int MirroredCopyCount,
+    int PlannedClipCount,
+    int WarningCount,
+    int ErrorCount,
+    IReadOnlyList<BuildRoleCoverageResponse> Roles,
+    IReadOnlyList<BuildPlanEntryResponse> PlanEntries,
+    IReadOnlyList<BuildSkeletonCoverageResponse> SkeletonCoverage,
+    IReadOnlyList<BuildFootContactCoverageResponse> FootContacts,
+    IReadOnlyList<BuildReadinessFindingResponse> Findings);
+
+public sealed record BuildRoleCoverageResponse(
+    string Role,
+    string Description,
+    bool IsRequired,
+    int IncludedClipCount);
+
+public sealed record BuildPlanEntryResponse(
+    string ClipId,
+    string ClipName,
+    string? ClipRole,
+    bool IsMirrored);
+
+public sealed record BuildSkeletonCoverageResponse(
+    string ClipId,
+    string ClipName,
+    double? Coverage,
+    int? MatchedBoneCount,
+    int? VisualBoneCount,
+    string Status);
+
+public sealed record BuildFootContactCoverageResponse(
+    string ClipId,
+    string ClipName,
+    bool HasContacts,
+    int RangeCount,
+    IReadOnlyList<string> PresentFeet,
+    IReadOnlyList<string> MissingFeet);
+
+public sealed record BuildReadinessFindingResponse(
+    string Severity,
+    string Code,
+    string Message,
+    string? ClipId,
+    string? ClipName);
+
+public sealed record BuildReportResponse(
+    string CharacterId,
+    string CharacterName,
+    string ReportPath,
+    DateTimeOffset GeneratedAtUtc,
+    string ReadinessFingerprint,
+    BuildReadinessResponse BuildReadiness);
 
 public sealed record ImportLogEntryResponse(
     string Level,

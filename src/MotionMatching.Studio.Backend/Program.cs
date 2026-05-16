@@ -127,6 +127,58 @@ app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/clips", async (
 })
 .DisableAntiforgery();
 
+app.MapDelete("/api/v1/workspaces/browser/characters/{characterId}", async (
+    string characterId,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.DeleteCharacterAsync(characterId, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "character_not_found", message = exception.Message });
+    }
+});
+
+app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/build-report", async (
+    string characterId,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.GenerateBuildReportAsync(characterId, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "character_not_found", message = exception.Message });
+    }
+});
+
+app.MapGet("/api/v1/workspaces/browser/characters/{characterId}/build-report", async (
+    string characterId,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.GetBuildReportAsync(characterId, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "character_not_found", message = exception.Message });
+    }
+    catch (FileNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "build_report_not_found", message = exception.Message });
+    }
+});
+
 app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/replace-source", async (
     string characterId,
     string clipId,

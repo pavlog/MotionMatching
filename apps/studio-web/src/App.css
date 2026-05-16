@@ -549,13 +549,30 @@
 .log-strip {
   grid-row: 2;
   display: flex;
+  width: 100%;
   min-width: 0;
   align-items: center;
   gap: 8px;
   padding: 0 10px;
   border-top: 1px solid var(--border);
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
   color: var(--text-2);
+  background: transparent;
+  font: inherit;
   font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.log-strip:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.log-strip:focus-visible {
+  outline: 1px solid rgba(104, 183, 255, 0.75);
+  outline-offset: -2px;
 }
 
 .empty-state,
@@ -677,6 +694,66 @@
   opacity: 0.55;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(0, 0, 0, 0.54);
+}
+
+.report-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(860px, 100%);
+  max-height: min(760px, 92dvh);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-1);
+  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.5);
+}
+
+.report-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.report-modal-header h2 {
+  margin: 0;
+  color: var(--text-0);
+  font-size: 14px;
+}
+
+.report-modal-header span {
+  display: block;
+  max-width: min(680px, 70vw);
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-modal-text {
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: var(--text-1);
+  background: var(--surface-0);
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .hidden-file-input {
   display: none;
 }
@@ -743,6 +820,113 @@
 .validation-summary.blocked {
   color: #ff9c9c;
   background: rgba(190, 55, 55, 0.16);
+}
+
+.validation-summary.warn {
+  color: #f2b753;
+  background: rgba(190, 132, 38, 0.16);
+}
+
+.readiness-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.readiness-stats span,
+.role-pill,
+.build-plan-row,
+.coverage-row {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.readiness-stats span {
+  padding: 5px 7px;
+}
+
+.readiness-stats strong {
+  color: var(--text-0);
+  font-weight: 700;
+}
+
+.role-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.role-pill {
+  padding: 3px 6px;
+  color: var(--text-2);
+}
+
+.role-pill.present {
+  border-color: rgba(139, 216, 166, 0.42);
+  color: #c6f0d4;
+  background: rgba(48, 140, 86, 0.14);
+}
+
+.role-pill.missing {
+  border-color: rgba(242, 183, 83, 0.32);
+}
+
+.build-plan-list,
+.build-coverage-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.build-plan-row,
+.coverage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 7px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.build-plan-row span,
+.coverage-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.build-plan-row span:last-child,
+.coverage-row span:last-child {
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.coverage-row.ok {
+  border-color: rgba(139, 216, 166, 0.35);
+}
+
+.coverage-row.warning,
+.coverage-row.missing {
+  border-color: rgba(242, 183, 83, 0.35);
+}
+
+.coverage-row.error {
+  border-color: rgba(255, 101, 101, 0.42);
+}
+
+.build-plan-row:hover,
+.coverage-row:hover,
+.finding-action:hover {
+  border-color: rgba(104, 183, 255, 0.42);
+  background: var(--surface-3);
 }
 
 .setting-row {
@@ -871,6 +1055,15 @@
   background: var(--surface-3);
 }
 
+.inspector-action.report-status-current {
+  border-color: rgba(139, 216, 166, 0.4);
+}
+
+.inspector-action.report-status-outdated {
+  border-color: rgba(242, 183, 83, 0.5);
+  color: #f2b753;
+}
+
 .custom-tag-list {
   display: flex;
   flex-wrap: wrap;
@@ -891,10 +1084,19 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  width: 100%;
   padding: 7px;
   border: 1px solid var(--border);
   border-radius: 5px;
+  color: var(--text-1);
+  background: transparent;
+  font: inherit;
   font-size: 12px;
+  text-align: left;
+}
+
+.finding-action {
+  cursor: pointer;
 }
 
 .finding strong {
