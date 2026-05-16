@@ -453,6 +453,7 @@ After clip reprocess/replacement:
 - `Generate Build Report` writes the current first build plan to `Builds/<CharacterName>/build-report.json`. This is a derived workspace artifact and does not produce runtime database files yet.
 - Existing build reports are discoverable from the character response as `buildReportPath`; `View Report` can load the saved JSON after a browser reload.
 - Build reports store a readiness fingerprint. Character response exposes `buildReportStatus` as `none`, `current`, or `outdated` by comparing the saved fingerprint with the current Build Readiness plan.
+- `Generate Runtime Draft` writes `Builds/<CharacterName>/runtime-build-draft.json`. It is the first runtime-facing build artifact, listing the built-in feature preset and planned `.mmskeleton/.mmpose/.mmfeatures` outputs, but it is explicitly not the final Unity-compatible database serialization yet.
 - Clip rows and inspectors show validation state using colors and icons for errors/warnings.
 - Left panel rows show aggregate validation badges.
 - Character rows show highest severity and counts across visual import, included clips, and build readiness.

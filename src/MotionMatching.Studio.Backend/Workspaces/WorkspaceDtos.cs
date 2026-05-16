@@ -140,6 +140,21 @@ public sealed record BuildReportResponse(
     string ReadinessFingerprint,
     BuildReadinessResponse BuildReadiness);
 
+public sealed record RuntimeBuildDraftResponse(
+    string CharacterId,
+    string CharacterName,
+    string DraftPath,
+    DateTimeOffset GeneratedAtUtc,
+    string SourceReportPath,
+    IReadOnlyList<string> FeaturePreset,
+    IReadOnlyList<RuntimeBuildArtifactResponse> Artifacts,
+    BuildReadinessResponse BuildReadiness);
+
+public sealed record RuntimeBuildArtifactResponse(
+    string FileName,
+    string Kind,
+    string Status);
+
 public sealed record ImportLogEntryResponse(
     string Level,
     string Message);

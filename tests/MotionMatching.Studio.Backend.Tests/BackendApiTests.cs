@@ -424,6 +424,48 @@ public sealed class BackendApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GenerateRuntimeBuildDraftWritesDraftArtifactPlan()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        await client.PostAsync("/api/v1/workspaces/browser", content: null);
+
+        using var characterForm = new MultipartFormDataContent();
+        characterForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("fake fbx bytes")), "visual", "IyoMixamo.fbx");
+
+        var characterResponse = await client.PostAsync("/api/v1/workspaces/browser/characters", characterForm);
+        characterResponse.EnsureSuccessStatusCode();
+        using var characterJson = JsonDocument.Parse(await characterResponse.Content.ReadAsStringAsync());
+        var characterId = characterJson.RootElement.GetProperty("id").GetString();
+
+        using var clipForm = new MultipartFormDataContent();
+        clipForm.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("HIERARCHY\nROOT Hips\nMOTION\nFrames: 42\nFrame Time: 0.0333333\n")), "clip", "RunForward.bvh");
+
+        var clipResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/clips", clipForm);
+        clipResponse.EnsureSuccessStatusCode();
+
+        var draftResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft", content: null);
+        var draftJson = await draftResponse.Content.ReadAsStringAsync();
+
+        draftResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"draftPath\":\"Builds/IyoMixamo/runtime-build-draft.json\"", draftJson);
+        Assert.Contains("\"sourceReportPath\":\"Builds/IyoMixamo/build-report.json\"", draftJson);
+        Assert.Contains("\"fileName\":\"IyoMixamo.mmskeleton\"", draftJson);
+        Assert.Contains("\"fileName\":\"IyoMixamo.mmpose\"", draftJson);
+        Assert.Contains("\"fileName\":\"IyoMixamo.mmfeatures\"", draftJson);
+
+        var draftPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "runtime-build-draft.json");
+        Assert.True(File.Exists(draftPath));
+
+        var persistedDraftJson = await File.ReadAllTextAsync(draftPath);
+        Assert.Contains("\"trajectory_position[20,40,60]:simulation_bone\"", persistedDraftJson);
+        Assert.Contains("\"status\": \"planned\"", persistedDraftJson);
+        Assert.DoesNotContain(_workspaceRoot, persistedDraftJson);
+        Assert.DoesNotContain(Path.GetTempPath(), persistedDraftJson);
+        Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "build-report.json")));
+    }
+
+    [Fact]
     public async Task UploadVisualFbxRejectsConfiguredSizeLimit()
     {
         await using var factory = CreateFactory(("Studio:MaxUploadBytes", "8"));

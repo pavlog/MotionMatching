@@ -10,6 +10,7 @@ import {
   deleteCharacter,
   deleteClip,
   generateBuildReport,
+  generateRuntimeBuildDraft,
   getBuildReport,
   openBrowserWorkspace,
   refreshFootContacts,
@@ -583,6 +584,35 @@ function App() {
     }
   }
 
+  async function handleGenerateRuntimeBuildDraft(character: CharacterResponse) {
+    setIsBusy(true)
+    appendLog(`Generating runtime build draft for ${character.name}`)
+    try {
+      const draft = await generateRuntimeBuildDraft(character.id)
+      setLastBuildReport({
+        characterId: draft.characterId,
+        characterName: draft.characterName,
+        reportPath: draft.sourceReportPath,
+        generatedAtUtc: draft.generatedAtUtc,
+        readinessFingerprint: '',
+        buildReadiness: draft.buildReadiness,
+      })
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((item) =>
+              item.id === character.id ? { ...item, buildReportPath: draft.sourceReportPath, buildReportStatus: 'current' } : item,
+            ),
+          }
+        : currentWorkspace)
+      appendLog(`Runtime build draft generated: ${draft.draftPath}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Runtime build draft generation failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   function openBuildReportViewer(report: BuildReportResponse, currentReadiness: CharacterResponse['buildReadiness']) {
     setTextViewer({
       heading: 'Build Report',
@@ -735,6 +765,7 @@ function App() {
             lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
             hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
             onGenerateBuildReport={() => handleGenerateBuildReport(selectedCharacter)}
+            onGenerateRuntimeBuildDraft={() => handleGenerateRuntimeBuildDraft(selectedCharacter)}
             onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
           />
@@ -1792,6 +1823,7 @@ function CharacterInspector({
   hasBuildReport,
   lastBuildReport,
   onGenerateBuildReport,
+  onGenerateRuntimeBuildDraft,
   onViewBuildReport,
   onSelectClip,
 }: {
@@ -1800,6 +1832,7 @@ function CharacterInspector({
   hasBuildReport: boolean
   lastBuildReport: BuildReportResponse | null
   onGenerateBuildReport: () => void
+  onGenerateRuntimeBuildDraft: () => void
   onViewBuildReport: () => void
   onSelectClip: (clipId: string) => void
 }) {
@@ -1829,6 +1862,15 @@ function CharacterInspector({
         >
           {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
           Generate Build Report
+        </button>
+        <button
+          type="button"
+          className="inspector-action"
+          disabled={isBusy}
+          onClick={onGenerateRuntimeBuildDraft}
+        >
+          {isBusy ? <Loader2 size={14} aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
+          Generate Runtime Draft
         </button>
         <button
           type="button"

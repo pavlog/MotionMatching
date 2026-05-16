@@ -157,6 +157,23 @@ export interface BuildReportResponse {
   buildReadiness: BuildReadinessResponse
 }
 
+export interface RuntimeBuildDraftResponse {
+  characterId: string
+  characterName: string
+  draftPath: string
+  generatedAtUtc: string
+  sourceReportPath: string
+  featurePreset: string[]
+  artifacts: RuntimeBuildArtifactResponse[]
+  buildReadiness: BuildReadinessResponse
+}
+
+export interface RuntimeBuildArtifactResponse {
+  fileName: string
+  kind: string
+  status: string
+}
+
 export type BuildReportStatus = 'none' | 'current' | 'outdated'
 
 export interface ImportLogEntryResponse {
@@ -320,6 +337,22 @@ export async function getBuildReport(characterId: string): Promise<BuildReportRe
 
   if (!response.ok) {
     throw new Error(`Build report load failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function generateRuntimeBuildDraft(characterId: string): Promise<RuntimeBuildDraftResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/runtime-build-draft`, {
+    method: 'POST',
+  })
+
+  if (response.status === 404) {
+    throw new Error('Character was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Runtime build draft generation failed: ${response.status}`)
   }
 
   return response.json()

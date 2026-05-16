@@ -12,6 +12,17 @@ namespace MotionMatching.Studio.Backend.Workspaces;
 public sealed class BrowserWorkspaceService
 {
     private const string WorkspaceFileName = "workspace.json";
+    private static readonly string[] RuntimeDraftFeaturePreset =
+    [
+        "trajectory_position[20,40,60]:simulation_bone",
+        "trajectory_direction[20,40,60]:simulation_bone",
+        "left_foot_position",
+        "left_foot_velocity",
+        "right_foot_position",
+        "right_foot_velocity",
+        "hips_velocity"
+    ];
+
     private static readonly IReadOnlyList<ClipRoleDefinition> ClipRoleDefinitions =
     [
         new("idle_loop", "no movement input"),
@@ -451,6 +462,39 @@ public sealed class BrowserWorkspaceService
         }
 
         return ManifestJson.Deserialize<BuildReportResponse>(await File.ReadAllTextAsync(fullReportPath, cancellationToken));
+    }
+
+    public async Task<RuntimeBuildDraftResponse> GenerateRuntimeBuildDraftAsync(
+        string characterId,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+
+        var report = await GenerateBuildReportAsync(characterId, cancellationToken);
+        var characterFolderName = GetCharacterFolderName(reference);
+        var draftPath = GetRuntimeBuildDraftPath(reference);
+        var draft = new RuntimeBuildDraftResponse(
+            report.CharacterId,
+            report.CharacterName,
+            draftPath,
+            DateTimeOffset.UtcNow,
+            report.ReportPath,
+            RuntimeDraftFeaturePreset,
+            [
+                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmskeleton", "skeleton", "planned"),
+                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmpose", "poses", "planned"),
+                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmfeatures", "features", "planned")
+            ],
+            report.BuildReadiness);
+
+        await WriteManifestAsync(
+            Path.Combine(GetWorkspaceRoot(), draftPath.Replace('/', Path.DirectorySeparatorChar)),
+            draft,
+            cancellationToken);
+
+        return draft;
     }
 
     private async Task<WorkspaceManifest> EnsureWorkspaceManifestAsync(CancellationToken cancellationToken)
@@ -1461,6 +1505,11 @@ public sealed class BrowserWorkspaceService
     private static string GetBuildReportPath(CharacterReference reference)
     {
         return ToPortablePath("Builds", GetCharacterFolderName(reference), "build-report.json");
+    }
+
+    private static string GetRuntimeBuildDraftPath(CharacterReference reference)
+    {
+        return ToPortablePath("Builds", GetCharacterFolderName(reference), "runtime-build-draft.json");
     }
 
     private static string ToAssetUrl(params string[] parts)
