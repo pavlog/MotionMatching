@@ -1865,6 +1865,15 @@ function formatRuntimeScaleMode(mode: RuntimeScaleMode) {
   return runtimeScaleModes.find((item) => item.value === mode)?.label ?? 'Auto'
 }
 
+function formatRuntimeScaleSummary(draft: RuntimeBuildDraftResponse | null) {
+  if (!draft) {
+    return 'Not generated'
+  }
+
+  const scale = draft.features.scale
+  return `${formatRuntimeScaleMode(scale.mode)} x${formatNumber(scale.normalizationFactor)}`
+}
+
 function formatBuildReportStatus(status: CharacterResponse['buildReportStatus']) {
   if (status === 'current') {
     return 'Report current'
@@ -2124,6 +2133,8 @@ function CharacterInspector({
         <dd>{formatBuildReportStatus(character.buildReportStatus)}</dd>
         <dt>Runtime</dt>
         <dd>{formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}</dd>
+        <dt>Scale</dt>
+        <dd>{formatRuntimeScaleSummary(lastRuntimeDraft)}</dd>
       </dl>
         <label className="setting-field">
           Runtime sample step
