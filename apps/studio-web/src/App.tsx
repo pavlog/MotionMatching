@@ -50,7 +50,9 @@ type CharacterContextMenu = {
 type TextViewer = {
   heading: string
   title: string
-  text: string
+  text?: string
+  report?: BuildReportResponse
+  currentReadiness?: CharacterResponse['buildReadiness']
 }
 
 const fallbackFrameCount = 120
@@ -563,7 +565,7 @@ function App() {
   async function handleViewBuildReport(character: CharacterResponse) {
     const cachedReport = lastBuildReport?.characterId === character.id ? lastBuildReport : null
     if (cachedReport) {
-      openBuildReportViewer(cachedReport)
+      openBuildReportViewer(cachedReport, character.buildReadiness)
       return
     }
 
@@ -572,7 +574,7 @@ function App() {
     try {
       const report = await getBuildReport(character.id)
       setLastBuildReport(report)
-      openBuildReportViewer(report)
+      openBuildReportViewer(report, character.buildReadiness)
       appendLog(`Opened build report: ${report.reportPath}`)
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Build report load failed', 'error')
@@ -581,11 +583,12 @@ function App() {
     }
   }
 
-  function openBuildReportViewer(report: BuildReportResponse) {
+  function openBuildReportViewer(report: BuildReportResponse, currentReadiness: CharacterResponse['buildReadiness']) {
     setTextViewer({
       heading: 'Build Report',
       title: report.reportPath,
-      text: JSON.stringify(report, null, 2),
+      report,
+      currentReadiness,
     })
   }
 
@@ -822,6 +825,8 @@ function App() {
           heading={textViewer.heading}
           title={textViewer.title}
           text={textViewer.text}
+          report={textViewer.report}
+          currentReadiness={textViewer.currentReadiness}
           onClose={() => setTextViewer(null)}
         />
       ) : null}
@@ -833,11 +838,15 @@ function TextModal({
   heading,
   title,
   text,
+  report,
+  currentReadiness,
   onClose,
 }: {
   heading: string
   title: string
-  text: string
+  text?: string
+  report?: BuildReportResponse
+  currentReadiness?: CharacterResponse['buildReadiness']
   onClose: () => void
 }) {
   useEffect(() => {
@@ -869,7 +878,113 @@ function TextModal({
             <X size={15} aria-hidden="true" />
           </button>
         </header>
-        <pre className="report-modal-text">{text}</pre>
+        {report ? <BuildReportView report={report} currentReadiness={currentReadiness} /> : <pre className="report-modal-text">{text}</pre>}
+      </section>
+    </div>
+  )
+}
+
+function BuildReportView({
+  report,
+  currentReadiness,
+}: {
+  report: BuildReportResponse
+  currentReadiness?: CharacterResponse['buildReadiness']
+}) {
+  const readiness = report.buildReadiness
+  const presentRoles = readiness.roles.filter((role) => role.includedClipCount > 0)
+  const missingRoles = readiness.roles.filter((role) => role.isRequired && role.includedClipCount === 0)
+  const changes = currentReadiness ? describeReadinessChanges(readiness, currentReadiness) : []
+
+  return (
+    <div className="report-view">
+      <section className="report-section">
+        <h3>Summary</h3>
+        <dl className="report-summary-grid">
+          <dt>Character</dt>
+          <dd>{report.characterName}</dd>
+          <dt>Generated</dt>
+          <dd>{formatReportDate(report.generatedAtUtc)}</dd>
+          <dt>Included</dt>
+          <dd>{readiness.includedClipCount}</dd>
+          <dt>Mirrored</dt>
+          <dd>{readiness.mirroredCopyCount}</dd>
+          <dt>Planned</dt>
+          <dd>{readiness.plannedClipCount}</dd>
+          <dt>Warnings</dt>
+          <dd>{readiness.warningCount}</dd>
+          <dt>Errors</dt>
+          <dd>{readiness.errorCount}</dd>
+        </dl>
+      </section>
+      {changes.length ? (
+        <section className="report-section">
+          <h3>Outdated Changes</h3>
+          <div className="report-table">
+            {changes.map((change) => (
+              <div key={change} className="report-row warning single">
+                <span>{change}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      <section className="report-section">
+        <h3>Roles</h3>
+        <p>Present: {presentRoles.length ? presentRoles.map((role) => `${role.role} (${role.includedClipCount})`).join(', ') : 'None'}</p>
+        <p>Missing: {missingRoles.length ? missingRoles.map((role) => role.role).join(', ') : 'None'}</p>
+      </section>
+      <section className="report-section">
+        <h3>Plan</h3>
+        <div className="report-table">
+          {readiness.planEntries.map((entry) => (
+            <div key={`${entry.clipId}-${entry.isMirrored ? 'mirror' : 'source'}`} className="report-row">
+              <span>{entry.clipName}</span>
+              <span>{entry.clipRole ?? 'Unassigned'}</span>
+              <span>{entry.isMirrored ? 'Mirrored' : 'Source'}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Skeleton</h3>
+        <div className="report-table">
+          {readiness.skeletonCoverage.map((item) => (
+            <div key={item.clipId} className={`report-row ${item.status}`}>
+              <span>{item.clipName}</span>
+              <span>{item.coverage === null ? '--' : `${Math.round(item.coverage * 100)}%`}</span>
+              <span>{item.status}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Foot Contacts</h3>
+        <div className="report-table">
+          {readiness.footContacts.map((item) => (
+            <div key={item.clipId} className={`report-row ${item.hasContacts ? 'ok' : 'missing'}`}>
+              <span>{item.clipName}</span>
+              <span>{item.hasContacts ? `${item.rangeCount} ranges` : 'Missing'}</span>
+              <span>{item.missingFeet.length ? `Missing ${item.missingFeet.join(', ')}` : item.presentFeet.join(', ')}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Findings</h3>
+        <div className="report-table">
+          {readiness.findings.length ? readiness.findings.map((finding, index) => (
+            <div key={`${finding.severity}-${finding.code}-${finding.clipId ?? 'character'}-${index}`} className={`report-row ${finding.severity}`}>
+              <span>{finding.clipName ?? 'Character'}</span>
+              <span>{finding.code}</span>
+              <span>{finding.message}</span>
+            </div>
+          )) : <p>No findings</p>}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Raw JSON</h3>
+        <pre className="report-modal-text raw">{JSON.stringify(report, null, 2)}</pre>
       </section>
     </div>
   )
@@ -1486,6 +1601,67 @@ function formatBuildReportStatus(status: CharacterResponse['buildReportStatus'])
   }
 
   return 'No report'
+}
+
+function formatReportDate(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function describeReadinessChanges(
+  saved: CharacterResponse['buildReadiness'],
+  current: CharacterResponse['buildReadiness'],
+) {
+  const changes: string[] = []
+  const addCountChange = (label: string, savedValue: number, currentValue: number) => {
+    if (savedValue !== currentValue) {
+      changes.push(`${label}: ${savedValue} -> ${currentValue}`)
+    }
+  }
+
+  addCountChange('Included clips', saved.includedClipCount, current.includedClipCount)
+  addCountChange('Mirrored copies', saved.mirroredCopyCount, current.mirroredCopyCount)
+  addCountChange('Planned entries', saved.plannedClipCount, current.plannedClipCount)
+  addCountChange('Warnings', saved.warningCount, current.warningCount)
+  addCountChange('Errors', saved.errorCount, current.errorCount)
+
+  if (summarizeRoleCoverage(saved) !== summarizeRoleCoverage(current)) {
+    changes.push('Role coverage changed')
+  }
+  if (summarizePlanEntries(saved) !== summarizePlanEntries(current)) {
+    changes.push('Build plan entries changed')
+  }
+  if (summarizeSkeletonCoverage(saved) !== summarizeSkeletonCoverage(current)) {
+    changes.push('Skeleton coverage changed')
+  }
+  if (summarizeFootContacts(saved) !== summarizeFootContacts(current)) {
+    changes.push('Foot contact coverage changed')
+  }
+  if (summarizeFindings(saved) !== summarizeFindings(current)) {
+    changes.push('Finding list changed')
+  }
+
+  return changes
+}
+
+function summarizeRoleCoverage(readiness: CharacterResponse['buildReadiness']) {
+  return readiness.roles.map((role) => `${role.role}:${role.includedClipCount}`).join('|')
+}
+
+function summarizePlanEntries(readiness: CharacterResponse['buildReadiness']) {
+  return readiness.planEntries.map((entry) => `${entry.clipId}:${entry.clipRole ?? ''}:${entry.isMirrored}`).join('|')
+}
+
+function summarizeSkeletonCoverage(readiness: CharacterResponse['buildReadiness']) {
+  return readiness.skeletonCoverage.map((item) => `${item.clipId}:${item.status}:${item.coverage ?? ''}`).join('|')
+}
+
+function summarizeFootContacts(readiness: CharacterResponse['buildReadiness']) {
+  return readiness.footContacts.map((item) => `${item.clipId}:${item.rangeCount}:${item.presentFeet.join(',')}:${item.missingFeet.join(',')}`).join('|')
+}
+
+function summarizeFindings(readiness: CharacterResponse['buildReadiness']) {
+  return readiness.findings.map((finding) => `${finding.clipId ?? ''}:${finding.severity}:${finding.code}:${finding.message}`).join('|')
 }
 
 function BuildReadinessPanel({
