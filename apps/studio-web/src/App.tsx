@@ -9,6 +9,7 @@ import {
   type RuntimeBuildDraftResponse,
   type RuntimeScaleMode,
   type SamplingQueryResponse,
+  type SamplingQueryUpdateRequest,
   type WorkspaceResponse,
   createSamplingQuery,
   createBrowserWorkspace,
@@ -163,6 +164,7 @@ function App() {
     () => selectedCharacter?.samplings.find((sampling) => selection?.type === 'sampling' && sampling.id === selection.samplingId) ?? null,
     [selectedCharacter, selection],
   )
+  const visibleSampling = selectedSampling ?? selectedCharacter?.samplings[0] ?? null
   const isSamplingPreviewActive = Boolean(selectedCharacter && !selectedClip && characterInspectorTab === 'sampling')
 
   useEffect(() => {
@@ -597,7 +599,7 @@ function App() {
     setIsBusy(true)
     appendLog(`Renaming sampling ${sampling.name}`)
     try {
-      const updatedCharacter = await updateSamplingQuery(characterId, samplingId, name)
+      const updatedCharacter = await updateSamplingQuery(characterId, samplingId, { name })
       setWorkspace((currentWorkspace) => currentWorkspace
         ? {
             ...currentWorkspace,
@@ -613,6 +615,31 @@ function App() {
       }
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Sampling rename failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function handleUpdateSampling(characterId: string, samplingId: string, update: SamplingQueryUpdateRequest) {
+    setIsBusy(true)
+    appendLog('Saving sampling')
+    try {
+      const updatedCharacter = await updateSamplingQuery(characterId, samplingId, update)
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((item) =>
+              item.id === updatedCharacter.id ? updatedCharacter : item,
+            ),
+          }
+        : currentWorkspace)
+      const updatedSampling = updatedCharacter.samplings.find((item) => item.id === samplingId)
+      if (updatedSampling) {
+        selectSampling(updatedCharacter.id, updatedSampling.id)
+        appendLog(`Saved sampling ${updatedSampling.name}`)
+      }
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Sampling save failed', 'error')
     } finally {
       setIsBusy(false)
     }
@@ -1069,6 +1096,7 @@ function App() {
           footContacts={selectedClip?.footContacts ?? null}
           clipMotionMode={clipMotionMode}
           samplingPreview={isSamplingPreviewActive}
+          samplingQuery={visibleSampling}
           label={selectedClip ? `${selectedCharacter?.name ?? 'Character'} / ${selectedClip.name}` : selectedCharacter?.name ?? 'Empty scene'}
           onClipMotionModeChange={setClipMotionMode}
           onAnimationStateChange={setAnimationPreviewState}
@@ -1099,7 +1127,7 @@ function App() {
             isBusy={isBusy}
             lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
             lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
-            selectedSampling={selectedSampling}
+            selectedSampling={visibleSampling}
             runtimeSampleFrameStep={selectedCharacter.runtimeBuildSettings.sampleFrameStep}
             runtimeScaleMode={selectedCharacter.runtimeBuildSettings.scaleMode}
             activeTab={characterInspectorTab}
@@ -1114,6 +1142,7 @@ function App() {
             onCopyRuntimeBuildFolder={() => handleCopyRuntimeBuildFolder(selectedCharacter)}
             onExportRuntimeBuild={() => handleExportRuntimeBuild(selectedCharacter)}
             onActiveTabChange={setCharacterInspectorTab}
+            onUpdateSampling={(samplingId, update) => handleUpdateSampling(selectedCharacter.id, samplingId, update)}
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
@@ -2535,6 +2564,15 @@ function formatVector(values: number[]) {
   return `[${values.slice(0, 4).map((value) => formatNumber(value)).join(', ')}]`
 }
 
+function updateVectorValue(values: number[], index: number, value: number) {
+  const next = [...values]
+  while (next.length < 3) {
+    next.push(0)
+  }
+  next[index] = Number.isFinite(value) ? value : 0
+  return next
+}
+
 function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
   const contract = {
     characterName: draft.characterName,
@@ -2850,6 +2888,7 @@ function CharacterInspector({
   onCopyRuntimeBuildFolder,
   onExportRuntimeBuild,
   onActiveTabChange,
+  onUpdateSampling,
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
   onSelectClip,
@@ -2873,6 +2912,7 @@ function CharacterInspector({
   onCopyRuntimeBuildFolder: () => void
   onExportRuntimeBuild: () => void
   onActiveTabChange: (tab: CharacterInspectorTab) => void
+  onUpdateSampling: (samplingId: string, update: SamplingQueryUpdateRequest) => void
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
   onSelectClip: (clipId: string) => void
@@ -2974,7 +3014,14 @@ function CharacterInspector({
             </button>
           </>
         ) : (
-          <SamplingInspector character={character} sampling={selectedSampling ?? character.samplings[0] ?? null} runtimeDraft={lastRuntimeDraft} />
+          <SamplingInspector
+            key={`${selectedSampling?.id ?? character.samplings[0]?.id ?? 'sampling-empty'}-${selectedSampling?.name ?? character.samplings[0]?.name ?? ''}`}
+            character={character}
+            sampling={selectedSampling ?? character.samplings[0] ?? null}
+            runtimeDraft={lastRuntimeDraft}
+            isBusy={isBusy}
+            onUpdateSampling={onUpdateSampling}
+          />
         )}
       </section>
       {activeTab === 'overview' ? (
@@ -3011,14 +3058,77 @@ function SamplingInspector({
   character,
   sampling,
   runtimeDraft,
+  isBusy,
+  onUpdateSampling,
 }: {
   character: CharacterResponse
   sampling: SamplingQueryResponse | null
   runtimeDraft: RuntimeBuildDraftResponse | null
+  isBusy: boolean
+  onUpdateSampling: (samplingId: string, update: SamplingQueryUpdateRequest) => void
 }) {
+  const [draft, setDraft] = useState<SamplingQueryResponse | null>(sampling)
   const runtimeScale = runtimeDraft
     ? `${formatRuntimeScaleMode(runtimeDraft.features.scale.mode)} x${formatNumber(runtimeDraft.features.scale.normalizationFactor)}`
     : 'Not generated'
+  const hasChanges = Boolean(sampling && draft && JSON.stringify(sampling) !== JSON.stringify(draft))
+
+  function updateCapsule(field: keyof SamplingQueryResponse['capsule'], value: number) {
+    setDraft((current) => current
+      ? {
+          ...current,
+          capsule: {
+            ...current.capsule,
+            [field]: value,
+          },
+        }
+      : current)
+  }
+
+  function updateVector(field: 'facing' | 'velocity', index: number, value: number) {
+    setDraft((current) => current
+      ? {
+          ...current,
+          [field]: updateVectorValue(current[field], index, value),
+        }
+      : current)
+  }
+
+  function updateTrajectory(index: number, field: 'frameOffset' | 'positionX' | 'positionZ', value: number) {
+    setDraft((current) => current
+      ? {
+          ...current,
+          trajectory: current.trajectory.map((point, pointIndex) => {
+            if (pointIndex !== index) {
+              return point
+            }
+
+            if (field === 'frameOffset') {
+              return { ...point, frameOffset: Math.max(Math.round(value), 1) }
+            }
+
+            return {
+              ...point,
+              position: updateVectorValue(point.position, field === 'positionX' ? 0 : 2, value),
+            }
+          }),
+        }
+      : current)
+  }
+
+  function saveSampling() {
+    if (!draft) {
+      return
+    }
+
+    onUpdateSampling(draft.id, {
+      name: draft.name,
+      capsule: draft.capsule,
+      facing: draft.facing,
+      velocity: draft.velocity,
+      trajectory: draft.trajectory,
+    })
+  }
 
   return (
     <>
@@ -3026,22 +3136,68 @@ function SamplingInspector({
         <dt>Character</dt>
         <dd>{character.name}</dd>
         <dt>Sampling</dt>
-        <dd>{sampling?.name ?? 'None'}</dd>
+        <dd>{draft?.name ?? 'None'}</dd>
         <dt>Capsule</dt>
-        <dd>{sampling ? `Height ${formatNumber(sampling.capsule.height)}, radius ${formatNumber(sampling.capsule.radius)}` : '--'}</dd>
+        <dd>{draft ? `Height ${formatNumber(draft.capsule.height)}, radius ${formatNumber(draft.capsule.radius)}` : '--'}</dd>
         <dt>Facing</dt>
-        <dd>{sampling ? formatVector(sampling.facing) : '--'}</dd>
+        <dd>{draft ? formatVector(draft.facing) : '--'}</dd>
         <dt>Trajectory</dt>
-        <dd>{sampling ? sampling.trajectory.map((point) => point.frameOffset).join(' / ') : '--'}</dd>
+        <dd>{draft ? draft.trajectory.map((point) => point.frameOffset).join(' / ') : '--'}</dd>
         <dt>Scale</dt>
         <dd>{runtimeScale}</dd>
       </dl>
-      <div className="sampling-query-grid">
-        <span>Position 0, 0, 0</span>
-        <span>{`Velocity ${sampling ? formatVector(sampling.velocity) : '--'}`}</span>
-        <span>{`Face ${sampling ? formatVector(sampling.facing) : '--'}`}</span>
-        <span>{sampling ? `${sampling.trajectory.length} points` : 'No sampling'}</span>
-      </div>
+      {draft ? (
+        <>
+          <div className="sampling-edit-grid">
+            <label className="setting-field">
+              Capsule height
+              <input type="number" min={1} value={draft.capsule.height} onChange={(event) => updateCapsule('height', Number(event.target.value) || 1)} />
+            </label>
+            <label className="setting-field">
+              Capsule radius
+              <input type="number" min={1} value={draft.capsule.radius} onChange={(event) => updateCapsule('radius', Number(event.target.value) || 1)} />
+            </label>
+            <label className="setting-field">
+              Facing X
+              <input type="number" step={0.1} value={draft.facing[0] ?? 0} onChange={(event) => updateVector('facing', 0, Number(event.target.value) || 0)} />
+            </label>
+            <label className="setting-field">
+              Facing Z
+              <input type="number" step={0.1} value={draft.facing[2] ?? 0} onChange={(event) => updateVector('facing', 2, Number(event.target.value) || 0)} />
+            </label>
+            <label className="setting-field">
+              Velocity X
+              <input type="number" step={0.1} value={draft.velocity[0] ?? 0} onChange={(event) => updateVector('velocity', 0, Number(event.target.value) || 0)} />
+            </label>
+            <label className="setting-field">
+              Velocity Z
+              <input type="number" step={0.1} value={draft.velocity[2] ?? 0} onChange={(event) => updateVector('velocity', 2, Number(event.target.value) || 0)} />
+            </label>
+          </div>
+          <div className="sampling-trajectory-list">
+            {draft.trajectory.map((point, index) => (
+              <div key={`${draft.id}-trajectory-${index}`} className="sampling-trajectory-row">
+                <label className="setting-field">
+                  F
+                  <input type="number" min={1} value={point.frameOffset} onChange={(event) => updateTrajectory(index, 'frameOffset', Number(event.target.value) || 1)} />
+                </label>
+                <label className="setting-field">
+                  X
+                  <input type="number" step={1} value={point.position[0] ?? 0} onChange={(event) => updateTrajectory(index, 'positionX', Number(event.target.value) || 0)} />
+                </label>
+                <label className="setting-field">
+                  Z
+                  <input type="number" step={1} value={point.position[2] ?? 0} onChange={(event) => updateTrajectory(index, 'positionZ', Number(event.target.value) || 0)} />
+                </label>
+              </div>
+            ))}
+          </div>
+          <button type="button" className="inspector-action" disabled={isBusy || !hasChanges} onClick={saveSampling}>
+            <FileText size={14} aria-hidden="true" />
+            Save Sampling
+          </button>
+        </>
+      ) : null}
       <button type="button" className="inspector-action" disabled title="Matcher is the next slice">
         <FileText size={14} aria-hidden="true" />
         Generate Sample

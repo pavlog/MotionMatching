@@ -248,9 +248,14 @@ public sealed class BrowserWorkspaceService
         }
 
         var nextSamplings = manifest.Samplings.ToList();
-        nextSamplings[index] = nextSamplings[index] with
+        var currentSampling = nextSamplings[index];
+        nextSamplings[index] = currentSampling with
         {
-            Name = NormalizeSamplingName(request.Name, manifest.Samplings, samplingId)
+            Name = request.Name is null ? currentSampling.Name : NormalizeSamplingName(request.Name, manifest.Samplings, samplingId),
+            Capsule = NormalizeSamplingCapsule(request.Capsule, currentSampling.Capsule),
+            Facing = NormalizeVector3(request.Facing, currentSampling.Facing),
+            Velocity = NormalizeVector3(request.Velocity, currentSampling.Velocity),
+            Trajectory = NormalizeSamplingTrajectory(request.Trajectory, currentSampling.Trajectory)
         };
         await WriteManifestAsync(characterManifestPath, manifest with { Samplings = nextSamplings }, cancellationToken);
         return await ToCharacterResponseAsync(reference, cancellationToken);
@@ -826,6 +831,57 @@ public sealed class BrowserWorkspaceService
         }
 
         return $"{baseName} {DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
+    }
+
+    private static SamplingCapsuleManifest NormalizeSamplingCapsule(
+        SamplingCapsuleUpdateRequest? request,
+        SamplingCapsuleManifest fallback)
+    {
+        if (request is null)
+        {
+            return fallback;
+        }
+
+        return new SamplingCapsuleManifest
+        {
+            Height = Math.Clamp(request.Height ?? fallback.Height, 1, 1000),
+            Radius = Math.Clamp(request.Radius ?? fallback.Radius, 1, 500)
+        };
+    }
+
+    private static double[] NormalizeVector3(IReadOnlyList<double>? value, IReadOnlyList<double> fallback)
+    {
+        if (value is null || value.Count < 3)
+        {
+            return [.. fallback.Take(3)];
+        }
+
+        return [NormalizeFinite(value[0]), NormalizeFinite(value[1]), NormalizeFinite(value[2])];
+    }
+
+    private static List<SamplingTrajectoryPointManifest> NormalizeSamplingTrajectory(
+        IReadOnlyList<SamplingTrajectoryPointUpdateRequest>? request,
+        IReadOnlyList<SamplingTrajectoryPointManifest> fallback)
+    {
+        if (request is null || request.Count == 0)
+        {
+            return [.. fallback];
+        }
+
+        return request
+            .Take(12)
+            .Select((point, index) => new SamplingTrajectoryPointManifest
+            {
+                FrameOffset = Math.Clamp(point.FrameOffset ?? fallback.ElementAtOrDefault(index)?.FrameOffset ?? (index + 1) * 20, 1, 10000),
+                Position = NormalizeVector3(point.Position, fallback.ElementAtOrDefault(index)?.Position ?? [0, 0, 0]),
+                Direction = NormalizeVector3(point.Direction, fallback.ElementAtOrDefault(index)?.Direction ?? [0, 0, 1])
+            })
+            .ToList();
+    }
+
+    private static double NormalizeFinite(double value)
+    {
+        return double.IsFinite(value) ? value : 0;
     }
 
     private async Task<(string ManifestPath, CharacterManifest Manifest)> ReadCharacterManifestAsync(

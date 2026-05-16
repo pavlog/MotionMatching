@@ -20,7 +20,7 @@ import {
   Vector3,
 } from '@babylonjs/core'
 import '@babylonjs/loaders/glTF'
-import type { FootContactDiagnosticsResponse } from './api'
+import type { FootContactDiagnosticsResponse, SamplingQueryResponse } from './api'
 
 interface BabylonViewportProps {
   previewUrl: string | null
@@ -32,6 +32,7 @@ interface BabylonViewportProps {
   footContacts: FootContactDiagnosticsResponse | null
   clipMotionMode: ClipMotionMode
   samplingPreview: boolean
+  samplingQuery: SamplingQueryResponse | null
   label: string
   onClipMotionModeChange?: (mode: ClipMotionMode) => void
   onAnimationStateChange?: (state: string) => void
@@ -70,6 +71,7 @@ export function BabylonViewport({
   footContacts,
   clipMotionMode,
   samplingPreview,
+  samplingQuery,
   label,
   onClipMotionModeChange,
   onAnimationStateChange,
@@ -523,8 +525,8 @@ export function BabylonViewport({
       return
     }
 
-    samplingPreviewMeshesRef.current = createSamplingPreview(scene)
-  }, [modelVersion, samplingPreview])
+    samplingPreviewMeshesRef.current = createSamplingPreview(scene, samplingQuery)
+  }, [modelVersion, samplingPreview, samplingQuery])
 
   return (
     <section className="viewport-panel" aria-label="3D viewport" data-animation-state={animationState}>
@@ -612,7 +614,7 @@ export function BabylonViewport({
   )
 }
 
-function createSamplingPreview(scene: Scene) {
+function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryResponse | null) {
   const meshes: Mesh[] = []
   const capsuleMaterial = new StandardMaterial('sampling-capsule-material', scene)
   capsuleMaterial.diffuseColor = new Color3(0.16, 0.62, 1)
@@ -628,14 +630,15 @@ function createSamplingPreview(scene: Scene) {
   trajectoryMaterial.diffuseColor = new Color3(1, 0.7, 0.22)
   trajectoryMaterial.emissiveColor = new Color3(0.4, 0.22, 0.04)
 
-  const capsuleHeight = 72
-  const capsuleRadius = 14
+  const capsuleHeight = Math.max(samplingQuery?.capsule.height ?? 72, 1)
+  const capsuleRadius = Math.max(samplingQuery?.capsule.radius ?? 14, 1)
+  const capsuleBodyHeight = Math.max(capsuleHeight - capsuleRadius * 2, 1)
   const capsuleBody = MeshBuilder.CreateCylinder('sampling-capsule-body', {
-    height: capsuleHeight - capsuleRadius * 2,
+    height: capsuleBodyHeight,
     diameter: capsuleRadius * 2,
     tessellation: 32,
   }, scene)
-  capsuleBody.position.y = (capsuleHeight - capsuleRadius * 2) * 0.5 + capsuleRadius
+  capsuleBody.position.y = capsuleBodyHeight * 0.5 + capsuleRadius
   capsuleBody.material = capsuleMaterial
   capsuleBody.isPickable = false
   meshes.push(capsuleBody)
@@ -651,34 +654,33 @@ function createSamplingPreview(scene: Scene) {
     meshes.push(cap)
   }
 
-  const faceStem = MeshBuilder.CreateCylinder('sampling-face-direction-stem', {
-    height: 46,
-    diameter: 3,
-    tessellation: 12,
+  const facingDirection = vectorFromSamplingArray(samplingQuery?.facing, new Vector3(0, 0, 1))
+  const normalizedFacing = facingDirection.lengthSquared() > 0.0001 ? facingDirection.normalize() : new Vector3(0, 0, 1)
+  const faceStart = new Vector3(0, capsuleHeight * 0.4, 0)
+  const faceEnd = faceStart.add(normalizedFacing.scale(Math.max(capsuleRadius * 3.5, 24)))
+  const faceLine = MeshBuilder.CreateLines('sampling-face-direction-line', {
+    points: [faceStart, faceEnd],
   }, scene)
-  faceStem.position = new Vector3(0, 28, 23)
-  faceStem.rotation.x = Math.PI * 0.5
-  faceStem.material = faceMaterial
-  faceStem.isPickable = false
-  meshes.push(faceStem)
+  faceLine.color = new Color3(0.45, 0.92, 0.62)
+  faceLine.isPickable = false
+  meshes.push(faceLine)
 
-  const faceHead = MeshBuilder.CreateCylinder('sampling-face-direction-head', {
-    height: 12,
-    diameterTop: 0,
-    diameterBottom: 10,
-    tessellation: 18,
+  const faceHead = MeshBuilder.CreateSphere('sampling-face-direction-head', {
+    diameter: Math.max(capsuleRadius * 0.55, 6),
+    segments: 18,
   }, scene)
-  faceHead.position = new Vector3(0, 28, 49)
-  faceHead.rotation.x = Math.PI * 0.5
+  faceHead.position = faceEnd
   faceHead.material = faceMaterial
   faceHead.isPickable = false
   meshes.push(faceHead)
 
-  const trajectoryPoints = [
-    new Vector3(0, 2, 28),
-    new Vector3(10, 2, 60),
-    new Vector3(18, 2, 96),
-  ]
+  const trajectoryPoints = samplingQuery?.trajectory.length
+    ? samplingQuery.trajectory.map((point) => vectorFromSamplingArray(point.position, Vector3.Zero()).add(new Vector3(0, 2, 0)))
+    : [
+        new Vector3(0, 2, 28),
+        new Vector3(10, 2, 60),
+        new Vector3(18, 2, 96),
+      ]
   for (const [index, point] of trajectoryPoints.entries()) {
     const marker = MeshBuilder.CreateSphere(`sampling-trajectory-point-${index + 1}`, {
       diameter: 7,
@@ -698,6 +700,18 @@ function createSamplingPreview(scene: Scene) {
   meshes.push(trajectoryLine)
 
   return meshes
+}
+
+function vectorFromSamplingArray(values: number[] | undefined, fallback: Vector3) {
+  if (!values || values.length < 3) {
+    return fallback.clone()
+  }
+
+  return new Vector3(
+    Number.isFinite(values[0]) ? values[0] : fallback.x,
+    Number.isFinite(values[1]) ? values[1] : fallback.y,
+    Number.isFinite(values[2]) ? values[2] : fallback.z,
+  )
 }
 
 function disposeSamplingPreview(meshes: Mesh[]) {

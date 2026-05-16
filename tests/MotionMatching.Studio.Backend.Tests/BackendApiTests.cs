@@ -105,6 +105,24 @@ public sealed class BackendApiTests : IAsyncLifetime
         renameResponse.EnsureSuccessStatusCode();
         Assert.Contains("\"name\":\"Turn right 90\"", renameJson);
 
+        var editResponse = await client.PatchAsJsonAsync($"/api/v1/workspaces/browser/characters/{characterId}/samplings/{samplingId}", new
+        {
+            capsule = new { height = 88, radius = 18 },
+            facing = new[] { 1.0, 0.0, 0.0 },
+            velocity = new[] { 2.0, 0.0, 3.0 },
+            trajectory = new[]
+            {
+                new { frameOffset = 20, position = new[] { 5.0, 0.0, 30.0 }, direction = new[] { 1.0, 0.0, 0.0 } },
+                new { frameOffset = 40, position = new[] { 15.0, 0.0, 58.0 }, direction = new[] { 1.0, 0.0, 0.0 } }
+            }
+        });
+        var editJson = await editResponse.Content.ReadAsStringAsync();
+        editResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"height\":88", editJson);
+        Assert.Contains("\"radius\":18", editJson);
+        Assert.Contains("\"frameOffset\":40", editJson);
+        Assert.Contains("\"position\":[15,0,58]", editJson);
+
         var deleteResponse = await client.DeleteAsync($"/api/v1/workspaces/browser/characters/{characterId}/samplings/{samplingId}");
         var deleteJson = await deleteResponse.Content.ReadAsStringAsync();
         deleteResponse.EnsureSuccessStatusCode();

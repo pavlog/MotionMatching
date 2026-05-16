@@ -45,6 +45,14 @@ export interface SamplingTrajectoryPointResponse {
   direction: number[]
 }
 
+export interface SamplingQueryUpdateRequest {
+  name?: string
+  capsule?: Partial<SamplingCapsuleResponse>
+  facing?: number[]
+  velocity?: number[]
+  trajectory?: Array<Partial<SamplingTrajectoryPointResponse>>
+}
+
 export interface ClipResponse {
   id: string
   name: string
@@ -474,13 +482,13 @@ export async function createSamplingQuery(characterId: string, name: string): Pr
   return response.json()
 }
 
-export async function updateSamplingQuery(characterId: string, samplingId: string, name: string): Promise<CharacterResponse> {
+export async function updateSamplingQuery(characterId: string, samplingId: string, update: SamplingQueryUpdateRequest): Promise<CharacterResponse> {
   const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/samplings/${samplingId}`, {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(update),
   })
 
   if (response.status === 404) {

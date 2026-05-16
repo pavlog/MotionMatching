@@ -339,7 +339,20 @@ public sealed record SamplingQueryCreateRequest(
     string? Name);
 
 public sealed record SamplingQueryUpdateRequest(
-    string? Name);
+    string? Name,
+    SamplingCapsuleUpdateRequest? Capsule,
+    IReadOnlyList<double>? Facing,
+    IReadOnlyList<double>? Velocity,
+    IReadOnlyList<SamplingTrajectoryPointUpdateRequest>? Trajectory);
+
+public sealed record SamplingCapsuleUpdateRequest(
+    double? Height,
+    double? Radius);
+
+public sealed record SamplingTrajectoryPointUpdateRequest(
+    int? FrameOffset,
+    IReadOnlyList<double>? Position,
+    IReadOnlyList<double>? Direction);
 
 public sealed record RuntimeBuildSettingsRequest(
     int SampleFrameStep,
