@@ -554,13 +554,9 @@ function App() {
   }
 
   async function handleCreateSampling(character: CharacterResponse) {
-    const name = window.prompt('Sampling name', `Sampling ${character.samplings.length + 1}`)
-    if (name === null) {
-      return
-    }
-
+    const name = `Sampling ${character.samplings.length + 1}`
     setIsBusy(true)
-    appendLog(`Creating sampling ${name.trim() || 'Sampling'}`)
+    appendLog(`Creating sampling ${name}`)
     try {
       const updatedCharacter = await createSamplingQuery(character.id, name)
       setWorkspace((currentWorkspace) => currentWorkspace
@@ -1033,8 +1029,12 @@ function App() {
                       type="button"
                       className="tree-folder-add"
                       disabled={isBusy}
-                      onClick={() => handleCreateSampling(character)}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleCreateSampling(character)
+                      }}
                       aria-label={`Add sampling for ${character.name}`}
+                      title="Add sampling"
                     >
                       +
                     </button>
