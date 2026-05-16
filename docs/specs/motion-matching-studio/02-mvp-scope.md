@@ -190,6 +190,7 @@ run and jump with the current character
 - Multi-character Play Mode.
 - Gamepad input.
 - Clip recording/authoring from a placed capsule/controller timeline, including baking the recorded motion into a new clip.
+- Sampling-track generated clip authoring is later: per-point role overrides, per-point matcher candidates, generated clip preview, and export of generated clips for a traditional graph-driven animation pipeline.
 - Obstacles, ledges, markers, or contextual interactions.
 - Persistent build artifacts in portable zip.
 - SQLite or database-backed workspace state.
