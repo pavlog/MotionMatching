@@ -230,10 +230,13 @@ export interface RuntimeFeatureDraftResponse {
 
 export interface RuntimeFeatureScaleResponse {
   status: string
+  mode: RuntimeScaleMode
   normalizationFactor: number
   maxObservedRootSpeed: number | null
   warnings: string[]
 }
+
+export type RuntimeScaleMode = 'auto' | 'source_x0_01' | 'character_x1'
 
 export interface RuntimeFeatureChannelResponse {
   name: string
@@ -426,8 +429,8 @@ export async function getBuildReport(characterId: string): Promise<BuildReportRe
   return response.json()
 }
 
-export async function generateRuntimeBuildDraft(characterId: string, sampleFrameStep = 1): Promise<RuntimeBuildDraftResponse> {
-  const search = new URLSearchParams({ sampleFrameStep: String(sampleFrameStep) })
+export async function generateRuntimeBuildDraft(characterId: string, sampleFrameStep = 1, scaleMode: RuntimeScaleMode = 'auto'): Promise<RuntimeBuildDraftResponse> {
+  const search = new URLSearchParams({ sampleFrameStep: String(sampleFrameStep), scaleMode })
   const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/runtime-build-draft?${search.toString()}`, {
     method: 'POST',
   })

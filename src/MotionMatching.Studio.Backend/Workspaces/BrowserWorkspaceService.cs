@@ -469,6 +469,7 @@ public sealed class BrowserWorkspaceService
     public async Task<RuntimeBuildDraftResponse> GenerateRuntimeBuildDraftAsync(
         string characterId,
         int? sampleFrameStep,
+        string? scaleMode,
         CancellationToken cancellationToken)
     {
         var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
@@ -482,7 +483,7 @@ public sealed class BrowserWorkspaceService
         var skeletonDraft = await BuildRuntimeSkeletonDraftAsync(reference, cancellationToken);
         var character = await ToCharacterResponseAsync(reference, cancellationToken);
         var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips, normalizedSampleFrameStep);
-        var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft, character.Clips);
+        var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft, character.Clips, NormalizeRuntimeScaleMode(scaleMode));
         var draft = new RuntimeBuildDraftResponse(
             report.CharacterId,
             report.CharacterName,
@@ -1067,7 +1068,8 @@ public sealed class BrowserWorkspaceService
     private static RuntimeFeatureDraftResponse BuildRuntimeFeatureDraft(
         IReadOnlyList<string> featurePreset,
         RuntimePoseDraftResponse poseDraft,
-        IReadOnlyList<ClipResponse> clips)
+        IReadOnlyList<ClipResponse> clips,
+        string scaleMode)
     {
         var clipsById = clips.ToDictionary(clip => clip.Id, StringComparer.Ordinal);
         var channels = featurePreset
@@ -1080,7 +1082,7 @@ public sealed class BrowserWorkspaceService
                 clip.IsMirrored,
                 clip.PlannedSampleCount))
             .ToArray();
-        var scale = BuildRuntimeFeatureScale(clips);
+        var scale = BuildRuntimeFeatureScale(clips, scaleMode);
         var samplePreviews = poseDraft.Clips
             .SelectMany(clip =>
             {
@@ -1129,28 +1131,49 @@ public sealed class BrowserWorkspaceService
             findings);
     }
 
-    private static RuntimeFeatureScaleResponse BuildRuntimeFeatureScale(IReadOnlyList<ClipResponse> clips)
+    private static RuntimeFeatureScaleResponse BuildRuntimeFeatureScale(IReadOnlyList<ClipResponse> clips, string mode)
     {
         var maxObservedRootSpeed = clips
             .Select(clip => clip.RootMotion?.AverageHorizontalSpeed)
             .Where(speed => speed is > 0)
             .DefaultIfEmpty()
             .Max();
+        if (mode == "source_x0_01")
+        {
+            return new RuntimeFeatureScaleResponse(
+                "forced_source_scale",
+                mode,
+                0.01,
+                maxObservedRootSpeed is null ? null : Math.Round(maxObservedRootSpeed.Value, 4),
+                ["Scale mode forced to Source x0.01; engine queries must use the same normalized database units."]);
+        }
+
+        if (mode == "character_x1")
+        {
+            return new RuntimeFeatureScaleResponse(
+                "forced_character_scale",
+                mode,
+                1,
+                maxObservedRootSpeed is null ? null : Math.Round(maxObservedRootSpeed.Value, 4),
+                ["Scale mode forced to Character x1; engine queries must use source database units without normalization."]);
+        }
+
         if (maxObservedRootSpeed is null)
         {
-            return new RuntimeFeatureScaleResponse("unknown", 1, null, ["Root-motion speed diagnostics are unavailable."]);
+            return new RuntimeFeatureScaleResponse("unknown", mode, 1, null, ["Root-motion speed diagnostics are unavailable."]);
         }
 
         if (maxObservedRootSpeed > 20)
         {
             return new RuntimeFeatureScaleResponse(
                 "source_scale_warning",
+                mode,
                 0.01,
                 Math.Round(maxObservedRootSpeed.Value, 4),
                 ["Root speed is unusually high for character-scale motion; preview values are normalized by 0.01."]);
         }
 
-        return new RuntimeFeatureScaleResponse("ok", 1, Math.Round(maxObservedRootSpeed.Value, 4), []);
+        return new RuntimeFeatureScaleResponse("ok", mode, 1, Math.Round(maxObservedRootSpeed.Value, 4), []);
     }
 
     private static int CalculateSampleCount(int? frameCount, int sampleFrameStep)
@@ -1770,6 +1793,26 @@ public sealed class BrowserWorkspaceService
             "loose" => ContactDetectionPreset.Loose,
             "manual_only" => ContactDetectionPreset.ManualOnly,
             _ => throw new ArgumentException($"Unknown contact detection preset: {preset}", nameof(preset))
+        };
+    }
+
+    private static string NormalizeRuntimeScaleMode(string? mode)
+    {
+        if (string.IsNullOrWhiteSpace(mode))
+        {
+            return "auto";
+        }
+
+        return NormalizeToken(mode) switch
+        {
+            "auto" => "auto",
+            "source_x0_01" => "source_x0_01",
+            "source_0_01" => "source_x0_01",
+            "source_scale" => "source_x0_01",
+            "character_x1" => "character_x1",
+            "character_1" => "character_x1",
+            "character_scale" => "character_x1",
+            _ => "auto"
         };
     }
 

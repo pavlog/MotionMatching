@@ -6,6 +6,7 @@ import {
   type CharacterResponse,
   type ContactDetectionPreset,
   type RuntimeBuildDraftResponse,
+  type RuntimeScaleMode,
   type WorkspaceResponse,
   createBrowserWorkspace,
   deleteCharacter,
@@ -88,6 +89,12 @@ const contactDetectionPresets: Array<{ value: ContactDetectionPreset; label: str
   { value: 'manual_only', label: 'Manual only' },
 ]
 
+const runtimeScaleModes: Array<{ value: RuntimeScaleMode; label: string }> = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'source_x0_01', label: 'Source x0.01' },
+  { value: 'character_x1', label: 'Character x1' },
+]
+
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const clipInputRef = useRef<HTMLInputElement>(null)
@@ -107,6 +114,7 @@ function App() {
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
   const [lastRuntimeDraft, setLastRuntimeDraft] = useState<RuntimeBuildDraftResponse | null>(null)
   const [runtimeSampleFrameStep, setRuntimeSampleFrameStep] = useState(1)
+  const [runtimeScaleMode, setRuntimeScaleMode] = useState<RuntimeScaleMode>('auto')
   const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([
     { id: 1, level: 'info', message: 'Ready' },
@@ -591,9 +599,9 @@ function App() {
 
   async function handleGenerateRuntimeBuildDraft(character: CharacterResponse) {
     setIsBusy(true)
-    appendLog(`Generating runtime build draft for ${character.name} at step ${runtimeSampleFrameStep}`)
+    appendLog(`Generating runtime build draft for ${character.name} at step ${runtimeSampleFrameStep}, scale ${runtimeScaleMode}`)
     try {
-      const draft = await generateRuntimeBuildDraft(character.id, runtimeSampleFrameStep)
+      const draft = await generateRuntimeBuildDraft(character.id, runtimeSampleFrameStep, runtimeScaleMode)
       setLastRuntimeDraft(draft)
       setLastBuildReport({
         characterId: draft.characterId,
@@ -809,6 +817,7 @@ function App() {
             lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
             lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
             runtimeSampleFrameStep={runtimeSampleFrameStep}
+            runtimeScaleMode={runtimeScaleMode}
             hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
             hasRuntimeDraft={Boolean((lastRuntimeDraft?.characterId === selectedCharacter.id && lastRuntimeDraft) || selectedCharacter.runtimeBuildDraftPath)}
             onGenerateBuildReport={() => handleGenerateBuildReport(selectedCharacter)}
@@ -816,6 +825,7 @@ function App() {
             onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
             onViewRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
             onRuntimeSampleFrameStepChange={setRuntimeSampleFrameStep}
+            onRuntimeScaleModeChange={setRuntimeScaleMode}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
           />
         ) : (
@@ -1109,7 +1119,7 @@ function RuntimeDraftView({
           <dt>Features</dt>
           <dd>{`${draft.features.status}, ${draft.features.featureCount} channels`}</dd>
           <dt>Scale</dt>
-          <dd>{`${draft.features.scale.status}, x${formatNumber(draft.features.scale.normalizationFactor)}`}</dd>
+          <dd>{`${formatRuntimeScaleMode(draft.features.scale.mode)}, ${draft.features.scale.status}, x${formatNumber(draft.features.scale.normalizationFactor)}`}</dd>
           <dt>Included</dt>
           <dd>{readiness.includedClipCount}</dd>
           <dt>Planned</dt>
@@ -1851,6 +1861,10 @@ function formatFeaturePreviewValues(values: Record<string, number | null>) {
     : '--'
 }
 
+function formatRuntimeScaleMode(mode: RuntimeScaleMode) {
+  return runtimeScaleModes.find((item) => item.value === mode)?.label ?? 'Auto'
+}
+
 function formatBuildReportStatus(status: CharacterResponse['buildReportStatus']) {
   if (status === 'current') {
     return 'Report current'
@@ -2066,11 +2080,13 @@ function CharacterInspector({
   lastBuildReport,
   lastRuntimeDraft,
   runtimeSampleFrameStep,
+  runtimeScaleMode,
   onGenerateBuildReport,
   onGenerateRuntimeBuildDraft,
   onViewBuildReport,
   onViewRuntimeDraft,
   onRuntimeSampleFrameStepChange,
+  onRuntimeScaleModeChange,
   onSelectClip,
 }: {
   character: CharacterResponse
@@ -2080,11 +2096,13 @@ function CharacterInspector({
   lastBuildReport: BuildReportResponse | null
   lastRuntimeDraft: RuntimeBuildDraftResponse | null
   runtimeSampleFrameStep: number
+  runtimeScaleMode: RuntimeScaleMode
   onGenerateBuildReport: () => void
   onGenerateRuntimeBuildDraft: () => void
   onViewBuildReport: () => void
   onViewRuntimeDraft: () => void
   onRuntimeSampleFrameStepChange: (value: number) => void
+  onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
   onSelectClip: (clipId: string) => void
 }) {
   return (
@@ -2118,6 +2136,18 @@ function CharacterInspector({
             disabled={isBusy}
             onChange={(event) => onRuntimeSampleFrameStepChange(Math.min(Math.max(Math.round(Number(event.target.value) || 1), 1), 120))}
           />
+        </label>
+        <label className="setting-field">
+          Runtime scale mode
+          <select
+            value={runtimeScaleMode}
+            disabled={isBusy}
+            onChange={(event) => onRuntimeScaleModeChange(event.target.value as RuntimeScaleMode)}
+          >
+            {runtimeScaleModes.map((mode) => (
+              <option key={mode.value} value={mode.value}>{mode.label}</option>
+            ))}
+          </select>
         </label>
         <button
           type="button"

@@ -206,6 +206,7 @@ public sealed record RuntimeFeatureDraftResponse(
 
 public sealed record RuntimeFeatureScaleResponse(
     string Status,
+    string Mode,
     double NormalizationFactor,
     double? MaxObservedRootSpeed,
     IReadOnlyList<string> Warnings);

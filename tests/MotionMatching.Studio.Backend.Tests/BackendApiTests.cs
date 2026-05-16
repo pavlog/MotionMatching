@@ -444,7 +444,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         var clipResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/clips", clipForm);
         clipResponse.EnsureSuccessStatusCode();
 
-        var draftResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft?sampleFrameStep=2", content: null);
+        var draftResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft?sampleFrameStep=2&scaleMode=source_x0_01", content: null);
         var draftJson = await draftResponse.Content.ReadAsStringAsync();
 
         draftResponse.EnsureSuccessStatusCode();
@@ -461,6 +461,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"featureCount\":7", draftJson);
         Assert.Contains("\"name\":\"trajectory_position\"", draftJson);
         Assert.Contains("\"scale\"", draftJson);
+        Assert.Contains("\"mode\":\"source_x0_01\"", draftJson);
         Assert.Contains("\"trajectory_position_20\"", draftJson);
         Assert.Contains("\"samplePreviews\"", draftJson);
 
@@ -493,6 +494,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"featureCount\": 7", persistedFeatureJson);
         Assert.Contains("\"boneSlot\": \"simulation_bone\"", persistedFeatureJson);
         Assert.Contains("\"sampleFrameStep\": 2", persistedFeatureJson);
+        Assert.Contains("\"normalizationFactor\": 0.01", persistedFeatureJson);
         Assert.Contains("\"values\": {", persistedFeatureJson);
         Assert.Contains("\"trajectory_direction_60\"", persistedFeatureJson);
         Assert.DoesNotContain(_workspaceRoot, persistedFeatureJson);
