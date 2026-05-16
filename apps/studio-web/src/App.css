@@ -1059,6 +1059,12 @@
   font: inherit;
   font-size: 12px;
   text-align: left;
+  cursor: pointer;
+}
+
+.sampling-match-row:hover {
+  border-color: rgba(104, 183, 255, 0.48);
+  background: var(--surface-3);
 }
 
 .sampling-match-row strong,

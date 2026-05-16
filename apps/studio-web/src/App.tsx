@@ -83,6 +83,14 @@ const fallbackFrameCount = 120
 const fallbackFrameRate = 24
 type ClipMotionMode = 'inPlace' | 'rootMotion'
 type CharacterInspectorTab = 'overview' | 'sampling'
+type SamplingMatcherPreviewMatch = {
+  clipId: string
+  clipName: string
+  isMirrored: boolean
+  frame: number
+  score: number
+  matchedFeatureCount: number
+}
 
 const clipRoles = [
   { value: 'idle_loop', description: 'no movement input' },
@@ -226,6 +234,19 @@ function App() {
     setSelection({ type: 'clip', characterId, clipId })
     setCharacterInspectorTab('overview')
   }, [resetTimeline])
+
+  const selectClipFrame = useCallback((characterId: string, clipId: string, frame: number) => {
+    resetTimeline()
+    setSelection({ type: 'clip', characterId, clipId })
+    setCharacterInspectorTab('overview')
+    setTimelineFrame(Math.max(Math.round(frame), 0))
+    setIsTimelinePlaying(false)
+  }, [resetTimeline])
+
+  const selectMatcherSample = useCallback((characterId: string, match: SamplingMatcherPreviewMatch) => {
+    selectClipFrame(characterId, match.clipId, match.frame)
+    appendLog(`Opened matcher result ${match.clipName} F${match.frame + 1}${match.isMirrored ? ' (mirrored source)' : ''}`)
+  }, [appendLog, selectClipFrame])
 
   const selectSampling = useCallback((characterId: string, samplingId: string) => {
     resetTimeline()
@@ -1168,6 +1189,7 @@ function App() {
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
+            onSelectMatcherSample={(match) => selectMatcherSample(selectedCharacter.id, match)}
           />
         ) : (
           <div className="inspector-empty">
@@ -2602,7 +2624,7 @@ function vectorToYawDegrees(values: number[]) {
   return Number.isFinite(degrees) ? degrees : 0
 }
 
-function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: RuntimeDatabaseDraftResponse) {
+function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: RuntimeDatabaseDraftResponse): SamplingMatcherPreviewMatch[] {
   const clipLookup = new Map(database.clips.map((clip) => [runtimeClipKey(clip.clipId, clip.isMirrored), clip]))
   const queryFeatures = buildSamplingQueryFeatureValues(query, database.scale.normalizationFactor)
 
@@ -3004,6 +3026,7 @@ function CharacterInspector({
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
   onSelectClip,
+  onSelectMatcherSample,
 }: {
   character: CharacterResponse
   isBusy: boolean
@@ -3030,6 +3053,7 @@ function CharacterInspector({
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
   onSelectClip: (clipId: string) => void
+  onSelectMatcherSample: (match: SamplingMatcherPreviewMatch) => void
 }) {
   return (
     <div className="inspector-content">
@@ -3137,6 +3161,7 @@ function CharacterInspector({
             isBusy={isBusy}
             onDraftChange={onSamplingDraftChange}
             onUpdateSampling={onUpdateSampling}
+            onSelectMatch={onSelectMatcherSample}
           />
         )}
       </section>
@@ -3178,6 +3203,7 @@ function SamplingInspector({
   isBusy,
   onDraftChange,
   onUpdateSampling,
+  onSelectMatch,
 }: {
   character: CharacterResponse
   sampling: SamplingQueryResponse | null
@@ -3186,6 +3212,7 @@ function SamplingInspector({
   isBusy: boolean
   onDraftChange: (query: SamplingQueryResponse) => void
   onUpdateSampling: (samplingId: string, update: SamplingQueryUpdateRequest) => void
+  onSelectMatch: (match: SamplingMatcherPreviewMatch) => void
 }) {
   const runtimeScale = runtimeDraft
     ? `${formatRuntimeScaleMode(runtimeDraft.features.scale.mode)} x${formatNumber(runtimeDraft.features.scale.normalizationFactor)}`
@@ -3400,16 +3427,18 @@ function SamplingInspector({
           matcherPreview.length ? (
             <div className="sampling-match-list">
               {matcherPreview.map((match, index) => (
-                <div
+                <button
                   key={`${match.clipId}-${match.isMirrored ? 'mirror' : 'source'}-${match.frame}`}
+                  type="button"
                   className="sampling-match-row"
                   title={`${match.matchedFeatureCount} feature channels compared`}
+                  onClick={() => onSelectMatch(match)}
                 >
                   <span>{index + 1}</span>
                   <strong>{`${match.clipName}${match.isMirrored ? ' Mirror' : ''}`}</strong>
                   <span>{`F${match.frame + 1}`}</span>
                   <span>{formatNumber(match.score)}</span>
-                </div>
+                </button>
               ))}
             </div>
           ) : (
