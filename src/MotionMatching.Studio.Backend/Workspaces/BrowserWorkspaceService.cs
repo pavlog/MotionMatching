@@ -202,6 +202,8 @@ public sealed class BrowserWorkspaceService
             BuildReadiness([], ToValidationResponse(validation)),
             null,
             "none",
+            null,
+            "none",
             importLog);
     }
 
@@ -475,6 +477,7 @@ public sealed class BrowserWorkspaceService
         var report = await GenerateBuildReportAsync(characterId, cancellationToken);
         var characterFolderName = GetCharacterFolderName(reference);
         var draftPath = GetRuntimeBuildDraftPath(reference);
+        var skeletonDraft = await BuildRuntimeSkeletonDraftAsync(reference, cancellationToken);
         var draft = new RuntimeBuildDraftResponse(
             report.CharacterId,
             report.CharacterName,
@@ -483,18 +486,41 @@ public sealed class BrowserWorkspaceService
             report.ReportPath,
             RuntimeDraftFeaturePreset,
             [
-                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmskeleton", "skeleton", "planned"),
+                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmskeleton", "skeleton", skeletonDraft.Status == "error" ? "blocked" : "draft"),
                 new RuntimeBuildArtifactResponse($"{characterFolderName}.mmpose", "poses", "planned"),
                 new RuntimeBuildArtifactResponse($"{characterFolderName}.mmfeatures", "features", "planned")
             ],
+            skeletonDraft,
             report.BuildReadiness);
 
+        await WriteManifestAsync(
+            Path.Combine(GetWorkspaceRoot(), GetRuntimeSkeletonDraftPath(reference).Replace('/', Path.DirectorySeparatorChar)),
+            skeletonDraft,
+            cancellationToken);
         await WriteManifestAsync(
             Path.Combine(GetWorkspaceRoot(), draftPath.Replace('/', Path.DirectorySeparatorChar)),
             draft,
             cancellationToken);
 
         return draft;
+    }
+
+    public async Task<RuntimeBuildDraftResponse> GetRuntimeBuildDraftAsync(
+        string characterId,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+
+        var draftPath = GetRuntimeBuildDraftPath(reference);
+        var fullDraftPath = Path.Combine(GetWorkspaceRoot(), draftPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(fullDraftPath))
+        {
+            throw new FileNotFoundException("Runtime build draft was not found.", fullDraftPath);
+        }
+
+        return ManifestJson.Deserialize<RuntimeBuildDraftResponse>(await File.ReadAllTextAsync(fullDraftPath, cancellationToken));
     }
 
     private async Task<WorkspaceManifest> EnsureWorkspaceManifestAsync(CancellationToken cancellationToken)
@@ -543,6 +569,9 @@ public sealed class BrowserWorkspaceService
         var buildReportPath = GetBuildReportPath(reference);
         var fullBuildReportPath = Path.Combine(GetWorkspaceRoot(), buildReportPath.Replace('/', Path.DirectorySeparatorChar));
         var buildReportStatus = GetBuildReportStatus(fullBuildReportPath, buildReadiness);
+        var runtimeBuildDraftPath = GetRuntimeBuildDraftPath(reference);
+        var fullRuntimeBuildDraftPath = Path.Combine(GetWorkspaceRoot(), runtimeBuildDraftPath.Replace('/', Path.DirectorySeparatorChar));
+        var runtimeBuildDraftStatus = GetRuntimeBuildDraftStatus(fullRuntimeBuildDraftPath, buildReadiness);
 
         return new CharacterResponse(
             manifest.Id.Value,
@@ -555,6 +584,8 @@ public sealed class BrowserWorkspaceService
             buildReadiness,
             File.Exists(fullBuildReportPath) ? buildReportPath : null,
             buildReportStatus,
+            File.Exists(fullRuntimeBuildDraftPath) ? runtimeBuildDraftPath : null,
+            runtimeBuildDraftStatus,
             importLog);
     }
 
@@ -842,6 +873,121 @@ public sealed class BrowserWorkspaceService
         {
             return "outdated";
         }
+    }
+
+    private static string GetRuntimeBuildDraftStatus(string fullDraftPath, BuildReadinessResponse buildReadiness)
+    {
+        if (!File.Exists(fullDraftPath))
+        {
+            return "none";
+        }
+
+        try
+        {
+            var draft = ManifestJson.Deserialize<RuntimeBuildDraftResponse>(File.ReadAllText(fullDraftPath));
+            return string.Equals(
+                ComputeReadinessFingerprint(draft.BuildReadiness),
+                ComputeReadinessFingerprint(buildReadiness),
+                StringComparison.Ordinal)
+                ? "current"
+                : "outdated";
+        }
+        catch
+        {
+            return "outdated";
+        }
+    }
+
+    private async Task<RuntimeSkeletonDraftResponse> BuildRuntimeSkeletonDraftAsync(
+        CharacterReference reference,
+        CancellationToken cancellationToken)
+    {
+        var characterManifestPath = Path.Combine(GetWorkspaceRoot(), reference.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
+        var characterRoot = Path.GetDirectoryName(characterManifestPath) ?? GetWorkspaceRoot();
+        var visualSourcePath = Path.Combine(characterRoot, "Visual", "source.fbx");
+        var extraction = await _skeletonNameExtractor.ExtractAsync(visualSourcePath, ClipSourceKind.Fbx, cancellationToken);
+        if (!extraction.Succeeded)
+        {
+            return new RuntimeSkeletonDraftResponse(
+                "error",
+                null,
+                0,
+                [],
+                BuildRuntimeSkeletonSlots([]),
+                [
+                    BuildFinding(
+                        "error",
+                        "runtime_skeleton_unavailable",
+                        $"Visual skeleton could not be inspected: {extraction.Error}",
+                        null)
+                ]);
+        }
+
+        var boneNames = extraction.BoneNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (boneNames.Length == 0)
+        {
+            return new RuntimeSkeletonDraftResponse(
+                "error",
+                null,
+                0,
+                [],
+                BuildRuntimeSkeletonSlots([]),
+                [
+                    BuildFinding(
+                        "error",
+                        "runtime_skeleton_empty",
+                        "Visual skeleton has no named bones.",
+                        null)
+                ]);
+        }
+
+        var slots = BuildRuntimeSkeletonSlots(boneNames);
+        var findings = slots
+            .Where(slot => slot.Status == "missing")
+            .Select(slot => BuildFinding(
+                slot.Slot is "leftFoot" or "rightFoot" ? "warning" : "info",
+                "runtime_skeleton_slot_missing",
+                $"Runtime skeleton slot {slot.Slot} was not matched.",
+                null))
+            .ToArray();
+
+        return new RuntimeSkeletonDraftResponse(
+            findings.Any(finding => finding.Severity == "warning") ? "warning" : "ok",
+            boneNames[0],
+            boneNames.Length,
+            boneNames,
+            slots,
+            findings);
+    }
+
+    private static IReadOnlyList<RuntimeSkeletonSlotResponse> BuildRuntimeSkeletonSlots(IReadOnlyList<string> boneNames)
+    {
+        return
+        [
+            BuildRuntimeSkeletonSlot("root", boneNames, ["root", "hips", "pelvis"]),
+            BuildRuntimeSkeletonSlot("hips", boneNames, ["hips", "pelvis"]),
+            BuildRuntimeSkeletonSlot("leftFoot", boneNames, ["leftfoot", "left_foot", "leftankle", "left_toe"]),
+            BuildRuntimeSkeletonSlot("rightFoot", boneNames, ["rightfoot", "right_foot", "rightankle", "right_toe"]),
+            BuildRuntimeSkeletonSlot("leftToes", boneNames, ["lefttoe", "lefttoebase", "left_toes", "left_toesend"]),
+            BuildRuntimeSkeletonSlot("rightToes", boneNames, ["righttoe", "righttoebase", "right_toes", "right_toesend"])
+        ];
+    }
+
+    private static RuntimeSkeletonSlotResponse BuildRuntimeSkeletonSlot(
+        string slot,
+        IReadOnlyList<string> boneNames,
+        IReadOnlyList<string> candidates)
+    {
+        var matched = boneNames.FirstOrDefault(bone =>
+        {
+            var normalized = NormalizeBoneName(bone);
+            return candidates.Any(candidate => normalized.Contains(NormalizeBoneName(candidate), StringComparison.Ordinal));
+        });
+
+        return new RuntimeSkeletonSlotResponse(slot, matched, matched is null ? "missing" : "matched");
     }
 
     private static string ComputeReadinessFingerprint(BuildReadinessResponse buildReadiness)
@@ -1510,6 +1656,12 @@ public sealed class BrowserWorkspaceService
     private static string GetRuntimeBuildDraftPath(CharacterReference reference)
     {
         return ToPortablePath("Builds", GetCharacterFolderName(reference), "runtime-build-draft.json");
+    }
+
+    private static string GetRuntimeSkeletonDraftPath(CharacterReference reference)
+    {
+        var characterFolderName = GetCharacterFolderName(reference);
+        return ToPortablePath("Builds", characterFolderName, $"{characterFolderName}.mmskeleton");
     }
 
     private static string ToAssetUrl(params string[] parts)

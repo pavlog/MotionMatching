@@ -17,6 +17,8 @@ public sealed record CharacterResponse(
     BuildReadinessResponse BuildReadiness,
     string? BuildReportPath,
     string BuildReportStatus,
+    string? RuntimeBuildDraftPath,
+    string RuntimeBuildDraftStatus,
     IReadOnlyList<ImportLogEntryResponse> ImportLog);
 
 public sealed record ClipResponse(
@@ -148,11 +150,25 @@ public sealed record RuntimeBuildDraftResponse(
     string SourceReportPath,
     IReadOnlyList<string> FeaturePreset,
     IReadOnlyList<RuntimeBuildArtifactResponse> Artifacts,
+    RuntimeSkeletonDraftResponse Skeleton,
     BuildReadinessResponse BuildReadiness);
 
 public sealed record RuntimeBuildArtifactResponse(
     string FileName,
     string Kind,
+    string Status);
+
+public sealed record RuntimeSkeletonDraftResponse(
+    string Status,
+    string? RootBoneName,
+    int BoneCount,
+    IReadOnlyList<string> BoneNames,
+    IReadOnlyList<RuntimeSkeletonSlotResponse> Slots,
+    IReadOnlyList<BuildReadinessFindingResponse> Findings);
+
+public sealed record RuntimeSkeletonSlotResponse(
+    string Slot,
+    string? BoneName,
     string Status);
 
 public sealed record ImportLogEntryResponse(

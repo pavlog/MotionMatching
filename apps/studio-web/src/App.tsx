@@ -5,6 +5,7 @@ import {
   type BuildReportResponse,
   type CharacterResponse,
   type ContactDetectionPreset,
+  type RuntimeBuildDraftResponse,
   type WorkspaceResponse,
   createBrowserWorkspace,
   deleteCharacter,
@@ -12,6 +13,7 @@ import {
   generateBuildReport,
   generateRuntimeBuildDraft,
   getBuildReport,
+  getRuntimeBuildDraft,
   openBrowserWorkspace,
   refreshFootContacts,
   replaceClipSource,
@@ -53,6 +55,7 @@ type TextViewer = {
   title: string
   text?: string
   report?: BuildReportResponse
+  runtimeDraft?: RuntimeBuildDraftResponse
   currentReadiness?: CharacterResponse['buildReadiness']
 }
 
@@ -102,6 +105,7 @@ function App() {
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenu | null>(null)
   const [characterContextMenu, setCharacterContextMenu] = useState<CharacterContextMenu | null>(null)
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
+  const [lastRuntimeDraft, setLastRuntimeDraft] = useState<RuntimeBuildDraftResponse | null>(null)
   const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([
     { id: 1, level: 'info', message: 'Ready' },
@@ -589,6 +593,7 @@ function App() {
     appendLog(`Generating runtime build draft for ${character.name}`)
     try {
       const draft = await generateRuntimeBuildDraft(character.id)
+      setLastRuntimeDraft(draft)
       setLastBuildReport({
         characterId: draft.characterId,
         characterName: draft.characterName,
@@ -601,7 +606,15 @@ function App() {
         ? {
             ...currentWorkspace,
             characters: currentWorkspace.characters.map((item) =>
-              item.id === character.id ? { ...item, buildReportPath: draft.sourceReportPath, buildReportStatus: 'current' } : item,
+              item.id === character.id
+                ? {
+                    ...item,
+                    buildReportPath: draft.sourceReportPath,
+                    buildReportStatus: 'current',
+                    runtimeBuildDraftPath: draft.draftPath,
+                    runtimeBuildDraftStatus: 'current',
+                  }
+                : item,
             ),
           }
         : currentWorkspace)
@@ -613,11 +626,41 @@ function App() {
     }
   }
 
+  async function handleViewRuntimeBuildDraft(character: CharacterResponse) {
+    const cachedDraft = lastRuntimeDraft?.characterId === character.id ? lastRuntimeDraft : null
+    if (cachedDraft) {
+      openRuntimeDraftViewer(cachedDraft, character.buildReadiness)
+      return
+    }
+
+    setIsBusy(true)
+    appendLog(`Loading runtime build draft for ${character.name}`)
+    try {
+      const draft = await getRuntimeBuildDraft(character.id)
+      setLastRuntimeDraft(draft)
+      openRuntimeDraftViewer(draft, character.buildReadiness)
+      appendLog(`Opened runtime build draft: ${draft.draftPath}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Runtime build draft load failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   function openBuildReportViewer(report: BuildReportResponse, currentReadiness: CharacterResponse['buildReadiness']) {
     setTextViewer({
       heading: 'Build Report',
       title: report.reportPath,
       report,
+      currentReadiness,
+    })
+  }
+
+  function openRuntimeDraftViewer(draft: RuntimeBuildDraftResponse, currentReadiness: CharacterResponse['buildReadiness']) {
+    setTextViewer({
+      heading: 'Runtime Draft',
+      title: draft.draftPath,
+      runtimeDraft: draft,
       currentReadiness,
     })
   }
@@ -763,10 +806,13 @@ function App() {
             character={selectedCharacter}
             isBusy={isBusy}
             lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
+            lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
             hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
+            hasRuntimeDraft={Boolean((lastRuntimeDraft?.characterId === selectedCharacter.id && lastRuntimeDraft) || selectedCharacter.runtimeBuildDraftPath)}
             onGenerateBuildReport={() => handleGenerateBuildReport(selectedCharacter)}
             onGenerateRuntimeBuildDraft={() => handleGenerateRuntimeBuildDraft(selectedCharacter)}
             onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
+            onViewRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
           />
         ) : (
@@ -857,6 +903,7 @@ function App() {
           title={textViewer.title}
           text={textViewer.text}
           report={textViewer.report}
+          runtimeDraft={textViewer.runtimeDraft}
           currentReadiness={textViewer.currentReadiness}
           onClose={() => setTextViewer(null)}
         />
@@ -870,6 +917,7 @@ function TextModal({
   title,
   text,
   report,
+  runtimeDraft,
   currentReadiness,
   onClose,
 }: {
@@ -877,6 +925,7 @@ function TextModal({
   title: string
   text?: string
   report?: BuildReportResponse
+  runtimeDraft?: RuntimeBuildDraftResponse
   currentReadiness?: CharacterResponse['buildReadiness']
   onClose: () => void
 }) {
@@ -909,7 +958,13 @@ function TextModal({
             <X size={15} aria-hidden="true" />
           </button>
         </header>
-        {report ? <BuildReportView report={report} currentReadiness={currentReadiness} /> : <pre className="report-modal-text">{text}</pre>}
+        {report ? (
+          <BuildReportView report={report} currentReadiness={currentReadiness} />
+        ) : runtimeDraft ? (
+          <RuntimeDraftView draft={runtimeDraft} currentReadiness={currentReadiness} />
+        ) : (
+          <pre className="report-modal-text">{text}</pre>
+        )}
       </section>
     </div>
   )
@@ -1016,6 +1071,93 @@ function BuildReportView({
       <section className="report-section">
         <h3>Raw JSON</h3>
         <pre className="report-modal-text raw">{JSON.stringify(report, null, 2)}</pre>
+      </section>
+    </div>
+  )
+}
+
+function RuntimeDraftView({
+  draft,
+  currentReadiness,
+}: {
+  draft: RuntimeBuildDraftResponse
+  currentReadiness?: CharacterResponse['buildReadiness']
+}) {
+  const readiness = draft.buildReadiness
+  const changes = currentReadiness ? describeReadinessChanges(readiness, currentReadiness) : []
+
+  return (
+    <div className="report-view">
+      <section className="report-section">
+        <h3>Summary</h3>
+        <dl className="report-summary-grid">
+          <dt>Character</dt>
+          <dd>{draft.characterName}</dd>
+          <dt>Generated</dt>
+          <dd>{formatReportDate(draft.generatedAtUtc)}</dd>
+          <dt>Source report</dt>
+          <dd>{draft.sourceReportPath}</dd>
+          <dt>Skeleton</dt>
+          <dd>{`${draft.skeleton.status}, ${draft.skeleton.boneCount} bones`}</dd>
+          <dt>Included</dt>
+          <dd>{readiness.includedClipCount}</dd>
+          <dt>Planned</dt>
+          <dd>{readiness.plannedClipCount}</dd>
+        </dl>
+      </section>
+      {changes.length ? (
+        <section className="report-section">
+          <h3>Outdated Changes</h3>
+          <div className="report-table">
+            {changes.map((change) => (
+              <div key={change} className="report-row warning single">
+                <span>{change}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      <section className="report-section">
+        <h3>Artifacts</h3>
+        <div className="report-table">
+          {draft.artifacts.map((artifact) => (
+            <div key={`${artifact.kind}-${artifact.fileName}`} className={`report-row ${artifact.status === 'blocked' ? 'error' : artifact.status === 'draft' ? 'ok' : ''}`}>
+              <span>{artifact.fileName}</span>
+              <span>{artifact.kind}</span>
+              <span>{artifact.status}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Feature Preset</h3>
+        <div className="report-table">
+          {draft.featurePreset.map((feature) => (
+            <div key={feature} className="report-row single">
+              <span>{feature}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Skeleton Slots</h3>
+        <div className="report-table">
+          {draft.skeleton.slots.map((slot) => (
+            <div key={slot.slot} className={`report-row ${slot.status === 'matched' ? 'ok' : 'missing'}`}>
+              <span>{slot.slot}</span>
+              <span>{slot.status}</span>
+              <span>{slot.boneName ?? '--'}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Skeleton Bones</h3>
+        <p>{draft.skeleton.boneNames.length ? draft.skeleton.boneNames.join(', ') : 'No bones'}</p>
+      </section>
+      <section className="report-section">
+        <h3>Raw JSON</h3>
+        <pre className="report-modal-text raw">{JSON.stringify(draft, null, 2)}</pre>
       </section>
     </div>
   )
@@ -1634,6 +1776,18 @@ function formatBuildReportStatus(status: CharacterResponse['buildReportStatus'])
   return 'No report'
 }
 
+function formatRuntimeDraftStatus(status: CharacterResponse['runtimeBuildDraftStatus']) {
+  if (status === 'current') {
+    return 'Runtime draft current'
+  }
+
+  if (status === 'outdated') {
+    return 'Runtime draft outdated'
+  }
+
+  return 'No runtime draft'
+}
+
 function formatReportDate(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
@@ -1821,19 +1975,25 @@ function CharacterInspector({
   character,
   isBusy,
   hasBuildReport,
+  hasRuntimeDraft,
   lastBuildReport,
+  lastRuntimeDraft,
   onGenerateBuildReport,
   onGenerateRuntimeBuildDraft,
   onViewBuildReport,
+  onViewRuntimeDraft,
   onSelectClip,
 }: {
   character: CharacterResponse
   isBusy: boolean
   hasBuildReport: boolean
+  hasRuntimeDraft: boolean
   lastBuildReport: BuildReportResponse | null
+  lastRuntimeDraft: RuntimeBuildDraftResponse | null
   onGenerateBuildReport: () => void
   onGenerateRuntimeBuildDraft: () => void
   onViewBuildReport: () => void
+  onViewRuntimeDraft: () => void
   onSelectClip: (clipId: string) => void
 }) {
   return (
@@ -1853,6 +2013,8 @@ function CharacterInspector({
         <dd>{character.clips?.length ?? 0}</dd>
         <dt>Report</dt>
         <dd>{formatBuildReportStatus(character.buildReportStatus)}</dd>
+        <dt>Runtime</dt>
+        <dd>{formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}</dd>
       </dl>
         <button
           type="button"
@@ -1881,6 +2043,16 @@ function CharacterInspector({
         >
           <FileText size={14} aria-hidden="true" />
           {lastBuildReport ? 'View Report' : character.buildReportPath ? 'Load Report' : 'View Report'}
+        </button>
+        <button
+          type="button"
+          className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`}
+          disabled={isBusy || !hasRuntimeDraft}
+          onClick={onViewRuntimeDraft}
+          title={formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}
+        >
+          <FileText size={14} aria-hidden="true" />
+          {lastRuntimeDraft ? 'View Runtime Draft' : character.runtimeBuildDraftPath ? 'Load Runtime Draft' : 'View Runtime Draft'}
         </button>
       </section>
       <BuildReadinessPanel character={character} onSelectClip={onSelectClip} />

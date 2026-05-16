@@ -18,6 +18,8 @@ export interface CharacterResponse {
   buildReadiness: BuildReadinessResponse
   buildReportPath: string | null
   buildReportStatus: BuildReportStatus
+  runtimeBuildDraftPath: string | null
+  runtimeBuildDraftStatus: BuildReportStatus
   importLog: ImportLogEntryResponse[]
 }
 
@@ -165,6 +167,7 @@ export interface RuntimeBuildDraftResponse {
   sourceReportPath: string
   featurePreset: string[]
   artifacts: RuntimeBuildArtifactResponse[]
+  skeleton: RuntimeSkeletonDraftResponse
   buildReadiness: BuildReadinessResponse
 }
 
@@ -172,6 +175,21 @@ export interface RuntimeBuildArtifactResponse {
   fileName: string
   kind: string
   status: string
+}
+
+export interface RuntimeSkeletonDraftResponse {
+  status: 'ok' | 'warning' | 'error'
+  rootBoneName: string | null
+  boneCount: number
+  boneNames: string[]
+  slots: RuntimeSkeletonSlotResponse[]
+  findings: BuildReadinessFindingResponse[]
+}
+
+export interface RuntimeSkeletonSlotResponse {
+  slot: string
+  boneName: string | null
+  status: 'matched' | 'missing'
 }
 
 export type BuildReportStatus = 'none' | 'current' | 'outdated'
@@ -353,6 +371,20 @@ export async function generateRuntimeBuildDraft(characterId: string): Promise<Ru
 
   if (!response.ok) {
     throw new Error(`Runtime build draft generation failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function getRuntimeBuildDraft(characterId: string): Promise<RuntimeBuildDraftResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/runtime-build-draft`)
+
+  if (response.status === 404) {
+    throw new Error('Runtime build draft was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Runtime build draft load failed: ${response.status}`)
   }
 
   return response.json()

@@ -451,18 +451,39 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"draftPath\":\"Builds/IyoMixamo/runtime-build-draft.json\"", draftJson);
         Assert.Contains("\"sourceReportPath\":\"Builds/IyoMixamo/build-report.json\"", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmskeleton\"", draftJson);
+        Assert.Contains("\"status\":\"draft\"", draftJson);
+        Assert.Contains("\"boneCount\":5", draftJson);
+        Assert.Contains("\"boneNames\":[\"Hips\",\"Spine\",\"Head\",\"LeftUpLeg\",\"RightUpLeg\"]", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmpose\"", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmfeatures\"", draftJson);
 
         var draftPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "runtime-build-draft.json");
+        var skeletonPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmskeleton");
         Assert.True(File.Exists(draftPath));
+        Assert.True(File.Exists(skeletonPath));
 
         var persistedDraftJson = await File.ReadAllTextAsync(draftPath);
         Assert.Contains("\"trajectory_position[20,40,60]:simulation_bone\"", persistedDraftJson);
-        Assert.Contains("\"status\": \"planned\"", persistedDraftJson);
+        Assert.Contains("\"status\": \"draft\"", persistedDraftJson);
         Assert.DoesNotContain(_workspaceRoot, persistedDraftJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedDraftJson);
+        var persistedSkeletonJson = await File.ReadAllTextAsync(skeletonPath);
+        Assert.Contains("\"rootBoneName\": \"Hips\"", persistedSkeletonJson);
+        Assert.Contains("\"slot\": \"hips\"", persistedSkeletonJson);
+        Assert.DoesNotContain(_workspaceRoot, persistedSkeletonJson);
+        Assert.DoesNotContain(Path.GetTempPath(), persistedSkeletonJson);
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "build-report.json")));
+
+        var workspaceResponse = await client.GetAsync("/api/v1/workspaces/browser");
+        var workspaceJson = await workspaceResponse.Content.ReadAsStringAsync();
+        workspaceResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"runtimeBuildDraftPath\":\"Builds/IyoMixamo/runtime-build-draft.json\"", workspaceJson);
+        Assert.Contains("\"runtimeBuildDraftStatus\":\"current\"", workspaceJson);
+
+        var loadedDraftResponse = await client.GetAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft");
+        var loadedDraftJson = await loadedDraftResponse.Content.ReadAsStringAsync();
+        loadedDraftResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"draftPath\":\"Builds/IyoMixamo/runtime-build-draft.json\"", loadedDraftJson);
     }
 
     [Fact]

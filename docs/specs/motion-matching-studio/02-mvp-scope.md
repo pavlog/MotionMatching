@@ -149,7 +149,7 @@ run and jump with the current character
 - `Generate Build Report` writes the current first build plan to `Builds/<CharacterName>/build-report.json`; this is a report artifact only, not the runtime database.
 - Saved build reports remain viewable after browser reload through the character inspector.
 - Saved build reports show `none/current/outdated` status based on a readiness fingerprint.
-- `Generate Runtime Draft` writes `Builds/<CharacterName>/runtime-build-draft.json` as the first runtime-facing artifact. It records the feature preset and planned `.mmskeleton/.mmpose/.mmfeatures` outputs, but does not claim Unity binary/database compatibility yet.
+- `Generate Runtime Draft` writes `Builds/<CharacterName>/runtime-build-draft.json` and a first `Builds/<CharacterName>/<CharacterName>.mmskeleton` JSON draft. It records the feature preset, planned `.mmskeleton/.mmpose/.mmfeatures` outputs, skeleton bones/slots, and exposes `none/current/outdated` runtime draft status in the character inspector, but does not claim Unity binary/database compatibility yet.
 - Build runs in background.
 - Dirty/outdated database warning strip in Play Mode.
 - UI build is per character; workspace-level Build All and CLI build are not required for the MVP vertical slice.
