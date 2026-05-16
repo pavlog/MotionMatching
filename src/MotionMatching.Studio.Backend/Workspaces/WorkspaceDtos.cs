@@ -19,6 +19,7 @@ public sealed record CharacterResponse(
     string BuildReportStatus,
     string? RuntimeBuildDraftPath,
     string RuntimeBuildDraftStatus,
+    RuntimeBuildSettingsResponse RuntimeBuildSettings,
     IReadOnlyList<ImportLogEntryResponse> ImportLog);
 
 public sealed record ClipResponse(
@@ -161,6 +162,10 @@ public sealed record RuntimeBuildArtifactResponse(
     string Kind,
     string Status);
 
+public sealed record RuntimeBuildSettingsResponse(
+    int SampleFrameStep,
+    string ScaleMode);
+
 public sealed record RuntimeSkeletonDraftResponse(
     string Status,
     string? RootBoneName,
@@ -241,3 +246,7 @@ public sealed record ClipSettingsRequest(
     string? ClipRole,
     string? ContactDetectionPreset,
     IReadOnlyList<string> Tags);
+
+public sealed record RuntimeBuildSettingsRequest(
+    int SampleFrameStep,
+    string? ScaleMode);

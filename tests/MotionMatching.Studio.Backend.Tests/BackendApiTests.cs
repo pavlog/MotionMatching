@@ -444,7 +444,12 @@ public sealed class BackendApiTests : IAsyncLifetime
         var clipResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/clips", clipForm);
         clipResponse.EnsureSuccessStatusCode();
 
-        var draftResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft?sampleFrameStep=2&scaleMode=source_x0_01", content: null);
+        var settingsResponse = await client.PatchAsJsonAsync(
+            $"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-settings",
+            new { sampleFrameStep = 2, scaleMode = "source_x0_01" });
+        settingsResponse.EnsureSuccessStatusCode();
+
+        var draftResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft", content: null);
         var draftJson = await draftResponse.Content.ReadAsStringAsync();
 
         draftResponse.EnsureSuccessStatusCode();
@@ -506,6 +511,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         workspaceResponse.EnsureSuccessStatusCode();
         Assert.Contains("\"runtimeBuildDraftPath\":\"Builds/IyoMixamo/runtime-build-draft.json\"", workspaceJson);
         Assert.Contains("\"runtimeBuildDraftStatus\":\"current\"", workspaceJson);
+        Assert.Contains("\"runtimeBuildSettings\":{\"sampleFrameStep\":2,\"scaleMode\":\"source_x0_01\"}", workspaceJson);
 
         var loadedDraftResponse = await client.GetAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft");
         var loadedDraftJson = await loadedDraftResponse.Content.ReadAsStringAsync();

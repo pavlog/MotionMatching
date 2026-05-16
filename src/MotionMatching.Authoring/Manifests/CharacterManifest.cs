@@ -16,4 +16,13 @@ public sealed record CharacterManifest
     public required string VisualManifestPath { get; init; }
 
     public List<string> ClipManifestPaths { get; init; } = [];
+
+    public RuntimeBuildSettings RuntimeBuildSettings { get; init; } = new();
+}
+
+public sealed record RuntimeBuildSettings
+{
+    public int SampleFrameStep { get; init; } = 1;
+
+    public string ScaleMode { get; init; } = "auto";
 }

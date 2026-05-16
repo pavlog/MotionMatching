@@ -217,6 +217,23 @@ app.MapGet("/api/v1/workspaces/browser/characters/{characterId}/runtime-build-dr
     }
 });
 
+app.MapPatch("/api/v1/workspaces/browser/characters/{characterId}/runtime-build-settings", async (
+    string characterId,
+    RuntimeBuildSettingsRequest request,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.UpdateRuntimeBuildSettingsAsync(characterId, request, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "character_not_found", message = exception.Message });
+    }
+});
+
 app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/clips/{clipId}/replace-source", async (
     string characterId,
     string clipId,

@@ -204,6 +204,7 @@ public sealed class BrowserWorkspaceService
             "none",
             null,
             "none",
+            ToRuntimeBuildSettingsResponse(character.RuntimeBuildSettings),
             importLog);
     }
 
@@ -476,14 +477,26 @@ public sealed class BrowserWorkspaceService
         var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
             ?? throw new KeyNotFoundException("Character was not found.");
 
-        var normalizedSampleFrameStep = Math.Clamp(sampleFrameStep ?? 1, 1, 120);
+        var (characterManifestPath, manifest) = await ReadCharacterManifestAsync(reference, cancellationToken);
+        var normalizedSampleFrameStep = Math.Clamp(sampleFrameStep ?? manifest.RuntimeBuildSettings.SampleFrameStep, 1, 120);
+        var normalizedScaleMode = NormalizeRuntimeScaleMode(scaleMode ?? manifest.RuntimeBuildSettings.ScaleMode);
+        var runtimeBuildSettings = new RuntimeBuildSettings
+        {
+            SampleFrameStep = normalizedSampleFrameStep,
+            ScaleMode = normalizedScaleMode
+        };
+        if (manifest.RuntimeBuildSettings != runtimeBuildSettings)
+        {
+            await WriteManifestAsync(characterManifestPath, manifest with { RuntimeBuildSettings = runtimeBuildSettings }, cancellationToken);
+        }
+
         var report = await GenerateBuildReportAsync(characterId, cancellationToken);
         var characterFolderName = GetCharacterFolderName(reference);
         var draftPath = GetRuntimeBuildDraftPath(reference);
         var skeletonDraft = await BuildRuntimeSkeletonDraftAsync(reference, cancellationToken);
         var character = await ToCharacterResponseAsync(reference, cancellationToken);
         var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips, normalizedSampleFrameStep);
-        var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft, character.Clips, NormalizeRuntimeScaleMode(scaleMode));
+        var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft, character.Clips, normalizedScaleMode);
         var draft = new RuntimeBuildDraftResponse(
             report.CharacterId,
             report.CharacterName,
@@ -540,6 +553,25 @@ public sealed class BrowserWorkspaceService
         return ManifestJson.Deserialize<RuntimeBuildDraftResponse>(await File.ReadAllTextAsync(fullDraftPath, cancellationToken));
     }
 
+    public async Task<CharacterResponse> UpdateRuntimeBuildSettingsAsync(
+        string characterId,
+        RuntimeBuildSettingsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+        var (characterManifestPath, manifest) = await ReadCharacterManifestAsync(reference, cancellationToken);
+        var settings = new RuntimeBuildSettings
+        {
+            SampleFrameStep = Math.Clamp(request.SampleFrameStep, 1, 120),
+            ScaleMode = NormalizeRuntimeScaleMode(request.ScaleMode)
+        };
+
+        await WriteManifestAsync(characterManifestPath, manifest with { RuntimeBuildSettings = settings }, cancellationToken);
+        return await ToCharacterResponseAsync(reference, cancellationToken);
+    }
+
     private async Task<WorkspaceManifest> EnsureWorkspaceManifestAsync(CancellationToken cancellationToken)
     {
         await CreateOrOpenBrowserWorkspaceAsync(cancellationToken);
@@ -571,8 +603,7 @@ public sealed class BrowserWorkspaceService
         CharacterReference reference,
         CancellationToken cancellationToken)
     {
-        var manifestPath = Path.Combine(GetWorkspaceRoot(), reference.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
-        var manifest = ManifestJson.Deserialize<CharacterManifest>(await File.ReadAllTextAsync(manifestPath, cancellationToken));
+        var (manifestPath, manifest) = await ReadCharacterManifestAsync(reference, cancellationToken);
         var characterRoot = Path.GetDirectoryName(manifestPath) ?? GetWorkspaceRoot();
         var sourcePath = Path.Combine(characterRoot, "Visual", "source.fbx");
         var previewPath = PreviewGlbCacheService.GetDefaultPreviewPath(characterRoot);
@@ -603,7 +634,21 @@ public sealed class BrowserWorkspaceService
             buildReportStatus,
             File.Exists(fullRuntimeBuildDraftPath) ? runtimeBuildDraftPath : null,
             runtimeBuildDraftStatus,
+            ToRuntimeBuildSettingsResponse(manifest.RuntimeBuildSettings),
             importLog);
+    }
+
+    private async Task<(string ManifestPath, CharacterManifest Manifest)> ReadCharacterManifestAsync(
+        CharacterReference reference,
+        CancellationToken cancellationToken)
+    {
+        var manifestPath = Path.Combine(GetWorkspaceRoot(), reference.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(manifestPath))
+        {
+            throw new KeyNotFoundException("Character manifest was not found.");
+        }
+
+        return (manifestPath, ManifestJson.Deserialize<CharacterManifest>(await File.ReadAllTextAsync(manifestPath, cancellationToken)));
     }
 
     private async Task<IReadOnlyList<ClipResponse>> ReadClipResponsesAsync(
@@ -2097,6 +2142,13 @@ public sealed class BrowserWorkspaceService
                 finding.Code,
                 finding.Severity.ToString().ToLowerInvariant(),
                 finding.Message)).ToArray());
+    }
+
+    private static RuntimeBuildSettingsResponse ToRuntimeBuildSettingsResponse(RuntimeBuildSettings settings)
+    {
+        return new RuntimeBuildSettingsResponse(
+            Math.Clamp(settings.SampleFrameStep, 1, 120),
+            NormalizeRuntimeScaleMode(settings.ScaleMode));
     }
 
     private sealed record ClipSkeletonValidationResult(

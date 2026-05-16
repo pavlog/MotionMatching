@@ -20,6 +20,7 @@ import {
   replaceClipSource,
   resolveAssetUrl,
   updateClipSettings,
+  updateRuntimeBuildSettings,
   uploadClip,
   uploadVisualCharacter,
 } from './api'
@@ -113,8 +114,6 @@ function App() {
   const [characterContextMenu, setCharacterContextMenu] = useState<CharacterContextMenu | null>(null)
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
   const [lastRuntimeDraft, setLastRuntimeDraft] = useState<RuntimeBuildDraftResponse | null>(null)
-  const [runtimeSampleFrameStep, setRuntimeSampleFrameStep] = useState(1)
-  const [runtimeScaleMode, setRuntimeScaleMode] = useState<RuntimeScaleMode>('auto')
   const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([
     { id: 1, level: 'info', message: 'Ready' },
@@ -532,6 +531,32 @@ function App() {
     }
   }
 
+  async function handleUpdateRuntimeBuildSettings(settings: Partial<{ sampleFrameStep: number; scaleMode: RuntimeScaleMode }>) {
+    if (!selectedCharacter) {
+      return
+    }
+
+    const nextSettings = {
+      sampleFrameStep: settings.sampleFrameStep ?? selectedCharacter.runtimeBuildSettings.sampleFrameStep,
+      scaleMode: settings.scaleMode ?? selectedCharacter.runtimeBuildSettings.scaleMode,
+    }
+
+    try {
+      const updatedCharacter = await updateRuntimeBuildSettings(selectedCharacter.id, nextSettings)
+      setWorkspace((currentWorkspace) => currentWorkspace
+        ? {
+            ...currentWorkspace,
+            characters: currentWorkspace.characters.map((item) =>
+              item.id === updatedCharacter.id ? updatedCharacter : item,
+            ),
+          }
+        : currentWorkspace)
+      appendLog(`Updated runtime build settings for ${selectedCharacter.name}`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Runtime build settings update failed', 'error')
+    }
+  }
+
   async function handleRefreshFootContacts(characterId: string, clip: ClipResponse) {
     setIsBusy(true)
     appendLog(`Refreshing foot contacts for ${clip.name}`)
@@ -598,10 +623,11 @@ function App() {
   }
 
   async function handleGenerateRuntimeBuildDraft(character: CharacterResponse) {
+    const { sampleFrameStep, scaleMode } = character.runtimeBuildSettings
     setIsBusy(true)
-    appendLog(`Generating runtime build draft for ${character.name} at step ${runtimeSampleFrameStep}, scale ${runtimeScaleMode}`)
+    appendLog(`Generating runtime build draft for ${character.name} at step ${sampleFrameStep}, scale ${scaleMode}`)
     try {
-      const draft = await generateRuntimeBuildDraft(character.id, runtimeSampleFrameStep, runtimeScaleMode)
+      const draft = await generateRuntimeBuildDraft(character.id, sampleFrameStep, scaleMode)
       setLastRuntimeDraft(draft)
       setLastBuildReport({
         characterId: draft.characterId,
@@ -816,16 +842,16 @@ function App() {
             isBusy={isBusy}
             lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
             lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
-            runtimeSampleFrameStep={runtimeSampleFrameStep}
-            runtimeScaleMode={runtimeScaleMode}
+            runtimeSampleFrameStep={selectedCharacter.runtimeBuildSettings.sampleFrameStep}
+            runtimeScaleMode={selectedCharacter.runtimeBuildSettings.scaleMode}
             hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
             hasRuntimeDraft={Boolean((lastRuntimeDraft?.characterId === selectedCharacter.id && lastRuntimeDraft) || selectedCharacter.runtimeBuildDraftPath)}
             onGenerateBuildReport={() => handleGenerateBuildReport(selectedCharacter)}
             onGenerateRuntimeBuildDraft={() => handleGenerateRuntimeBuildDraft(selectedCharacter)}
             onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
             onViewRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
-            onRuntimeSampleFrameStepChange={setRuntimeSampleFrameStep}
-            onRuntimeScaleModeChange={setRuntimeScaleMode}
+            onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
+            onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
           />
         ) : (
@@ -1098,6 +1124,16 @@ function RuntimeDraftView({
 }) {
   const readiness = draft.buildReadiness
   const changes = currentReadiness ? describeReadinessChanges(readiness, currentReadiness) : []
+  const [contractCopyState, setContractCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+
+  async function copyEngineQueryContract() {
+    try {
+      await navigator.clipboard.writeText(buildEngineQueryContract(draft))
+      setContractCopyState('copied')
+    } catch {
+      setContractCopyState('failed')
+    }
+  }
 
   return (
     <div className="report-view">
@@ -1125,6 +1161,10 @@ function RuntimeDraftView({
           <dt>Planned</dt>
           <dd>{readiness.plannedClipCount}</dd>
         </dl>
+        <button type="button" className="inspector-action" onClick={copyEngineQueryContract}>
+          <FileText size={14} aria-hidden="true" />
+          {contractCopyState === 'copied' ? 'Copied Query Contract' : contractCopyState === 'failed' ? 'Copy Failed' : 'Copy Query Contract'}
+        </button>
       </section>
       {changes.length ? (
         <section className="report-section">
@@ -1859,6 +1899,36 @@ function formatFeaturePreviewValues(values: Record<string, number | null>) {
   return visibleEntries.length
     ? visibleEntries.map(([name, value]) => `${name} ${formatNumber(value ?? Number.NaN)}`).join(', ')
     : '--'
+}
+
+function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
+  const contract = {
+    characterName: draft.characterName,
+    sampleFrameStep: draft.sampleFrameStep,
+    scale: {
+      mode: draft.features.scale.mode,
+      normalizationFactor: draft.features.scale.normalizationFactor,
+      maxObservedRootSpeed: draft.features.scale.maxObservedRootSpeed,
+      note: 'Engine query units must match these database units.',
+    },
+    features: draft.features.channels.map((channel) => ({
+      name: channel.name,
+      kind: channel.kind,
+      boneSlot: channel.boneSlot,
+      trajectoryFrames: channel.trajectoryFrames,
+    })),
+    skeletonSlots: draft.skeleton.slots.map((slot) => ({
+      slot: slot.slot,
+      boneName: slot.boneName,
+      status: slot.status,
+    })),
+    plannedSamples: {
+      poseSamples: draft.poses.plannedPoseSampleCount,
+      featureSamples: draft.features.plannedSampleCount,
+    },
+  }
+
+  return JSON.stringify(contract, null, 2)
 }
 
 function formatRuntimeScaleMode(mode: RuntimeScaleMode) {

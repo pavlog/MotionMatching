@@ -20,6 +20,7 @@ export interface CharacterResponse {
   buildReportStatus: BuildReportStatus
   runtimeBuildDraftPath: string | null
   runtimeBuildDraftStatus: BuildReportStatus
+  runtimeBuildSettings: RuntimeBuildSettingsResponse
   importLog: ImportLogEntryResponse[]
 }
 
@@ -238,6 +239,16 @@ export interface RuntimeFeatureScaleResponse {
 
 export type RuntimeScaleMode = 'auto' | 'source_x0_01' | 'character_x1'
 
+export interface RuntimeBuildSettingsResponse {
+  sampleFrameStep: number
+  scaleMode: RuntimeScaleMode
+}
+
+export interface RuntimeBuildSettingsRequest {
+  sampleFrameStep: number
+  scaleMode: RuntimeScaleMode
+}
+
 export interface RuntimeFeatureChannelResponse {
   name: string
   kind: string
@@ -455,6 +466,26 @@ export async function getRuntimeBuildDraft(characterId: string): Promise<Runtime
 
   if (!response.ok) {
     throw new Error(`Runtime build draft load failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function updateRuntimeBuildSettings(characterId: string, settings: RuntimeBuildSettingsRequest): Promise<CharacterResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/runtime-build-settings`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(settings),
+  })
+
+  if (response.status === 404) {
+    throw new Error('Character was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Runtime build settings update failed: ${response.status}`)
   }
 
   return response.json()

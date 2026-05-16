@@ -35,6 +35,28 @@
       "items": {
         "type": "string"
       }
+    },
+    "runtimeBuildSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sampleFrameStep",
+        "scaleMode"
+      ],
+      "properties": {
+        "sampleFrameStep": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120
+        },
+        "scaleMode": {
+          "enum": [
+            "auto",
+            "source_x0_01",
+            "character_x1"
+          ]
+        }
+      }
     }
   }
 }
