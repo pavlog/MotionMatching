@@ -1222,25 +1222,35 @@ function cloneAnimationKeyValue(value: unknown) {
 
 function createGroundGrid(scene: Scene) {
   const extent = 500
+  const unitsPerMeter = 100
   const minorStep = 10
-  const majorStep = 50
+  const majorStep = unitsPerMeter
+  const majorLineHalfWidth = 0.35
   const minorLines: Vector3[][] = []
   const majorLines: Vector3[][] = []
 
   for (let value = -extent; value <= extent; value += minorStep) {
-    const target = value % majorStep === 0 ? majorLines : minorLines
-    target.push([new Vector3(-extent, 0, value), new Vector3(extent, 0, value)])
-    target.push([new Vector3(value, 0, -extent), new Vector3(value, 0, extent)])
+    if (value % majorStep === 0) {
+      majorLines.push([new Vector3(-extent, 0, value), new Vector3(extent, 0, value)])
+      majorLines.push([new Vector3(-extent, 0, value - majorLineHalfWidth), new Vector3(extent, 0, value - majorLineHalfWidth)])
+      majorLines.push([new Vector3(-extent, 0, value + majorLineHalfWidth), new Vector3(extent, 0, value + majorLineHalfWidth)])
+      majorLines.push([new Vector3(value, 0, -extent), new Vector3(value, 0, extent)])
+      majorLines.push([new Vector3(value - majorLineHalfWidth, 0, -extent), new Vector3(value - majorLineHalfWidth, 0, extent)])
+      majorLines.push([new Vector3(value + majorLineHalfWidth, 0, -extent), new Vector3(value + majorLineHalfWidth, 0, extent)])
+    } else {
+      minorLines.push([new Vector3(-extent, 0, value), new Vector3(extent, 0, value)])
+      minorLines.push([new Vector3(value, 0, -extent), new Vector3(value, 0, extent)])
+    }
   }
 
   const minorGrid = MeshBuilder.CreateLineSystem('ground-grid-minor', { lines: minorLines }, scene)
-  minorGrid.color = new Color3(0.23, 0.25, 0.29)
-  minorGrid.alpha = 0.55
+  minorGrid.color = new Color3(0.2, 0.22, 0.25)
+  minorGrid.alpha = 0.45
   minorGrid.isPickable = false
 
   const majorGrid = MeshBuilder.CreateLineSystem('ground-grid-major', { lines: majorLines }, scene)
-  majorGrid.color = new Color3(0.34, 0.37, 0.43)
-  majorGrid.alpha = 0.75
+  majorGrid.color = new Color3(0.43, 0.47, 0.54)
+  majorGrid.alpha = 0.92
   majorGrid.isPickable = false
 
   const xAxis = MeshBuilder.CreateLines('ground-grid-x-axis', {

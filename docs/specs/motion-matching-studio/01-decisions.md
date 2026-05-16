@@ -163,6 +163,7 @@ This document records accepted design decisions so future sessions can continue 
   - `F` frames the selected character/clip.
   - Numpad `1`/`3`/`7` switch to front/right/top views.
   - Numpad `5` toggles perspective/orthographic.
+- The viewport ground grid treats the current source scene as centimeter-like units for Mixamo-style assets: minor grid lines are every `10` units and emphasized meter lines are every `100` units. Runtime scale normalization is still handled by build settings; the viewport grid is a visual authoring aid.
 - Add context menus where useful.
 - Context menus should be available where natural:
   - Character rows: Rename, Replace Visual FBX, Build, Export, Validate, Delete.
