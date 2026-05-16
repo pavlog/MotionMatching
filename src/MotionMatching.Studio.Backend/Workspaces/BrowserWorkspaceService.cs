@@ -478,6 +478,9 @@ public sealed class BrowserWorkspaceService
         var characterFolderName = GetCharacterFolderName(reference);
         var draftPath = GetRuntimeBuildDraftPath(reference);
         var skeletonDraft = await BuildRuntimeSkeletonDraftAsync(reference, cancellationToken);
+        var character = await ToCharacterResponseAsync(reference, cancellationToken);
+        var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips);
+        var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft);
         var draft = new RuntimeBuildDraftResponse(
             report.CharacterId,
             report.CharacterName,
@@ -487,15 +490,25 @@ public sealed class BrowserWorkspaceService
             RuntimeDraftFeaturePreset,
             [
                 new RuntimeBuildArtifactResponse($"{characterFolderName}.mmskeleton", "skeleton", skeletonDraft.Status == "error" ? "blocked" : "draft"),
-                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmpose", "poses", "planned"),
-                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmfeatures", "features", "planned")
+                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmpose", "poses", poseDraft.Status == "error" ? "blocked" : "draft"),
+                new RuntimeBuildArtifactResponse($"{characterFolderName}.mmfeatures", "features", featureDraft.Status == "error" ? "blocked" : "draft")
             ],
             skeletonDraft,
+            poseDraft,
+            featureDraft,
             report.BuildReadiness);
 
         await WriteManifestAsync(
             Path.Combine(GetWorkspaceRoot(), GetRuntimeSkeletonDraftPath(reference).Replace('/', Path.DirectorySeparatorChar)),
             skeletonDraft,
+            cancellationToken);
+        await WriteManifestAsync(
+            Path.Combine(GetWorkspaceRoot(), GetRuntimePoseDraftPath(reference).Replace('/', Path.DirectorySeparatorChar)),
+            poseDraft,
+            cancellationToken);
+        await WriteManifestAsync(
+            Path.Combine(GetWorkspaceRoot(), GetRuntimeFeatureDraftPath(reference).Replace('/', Path.DirectorySeparatorChar)),
+            featureDraft,
             cancellationToken);
         await WriteManifestAsync(
             Path.Combine(GetWorkspaceRoot(), draftPath.Replace('/', Path.DirectorySeparatorChar)),
@@ -988,6 +1001,141 @@ public sealed class BrowserWorkspaceService
         });
 
         return new RuntimeSkeletonSlotResponse(slot, matched, matched is null ? "missing" : "matched");
+    }
+
+    private static RuntimePoseDraftResponse BuildRuntimePoseDraft(
+        BuildReadinessResponse readiness,
+        IReadOnlyList<ClipResponse> clips)
+    {
+        var clipsById = clips.ToDictionary(clip => clip.Id, StringComparer.Ordinal);
+        var entries = readiness.PlanEntries
+            .Select(entry =>
+            {
+                clipsById.TryGetValue(entry.ClipId, out var clip);
+                var plannedSampleCount = Math.Max(clip?.FrameCount ?? 0, 0);
+                return new RuntimePoseClipDraftResponse(
+                    entry.ClipId,
+                    entry.ClipName,
+                    entry.ClipRole,
+                    entry.IsMirrored,
+                    clip?.FrameCount,
+                    clip?.FrameRate,
+                    clip?.DurationSeconds,
+                    plannedSampleCount);
+            })
+            .ToArray();
+
+        var findings = new List<BuildReadinessFindingResponse>();
+        if (entries.Length == 0)
+        {
+            findings.Add(BuildFinding(
+                "error",
+                "runtime_pose_no_entries",
+                "Runtime pose draft has no build plan entries.",
+                null));
+        }
+
+        foreach (var entry in entries.Where(entry => entry.PlannedSampleCount == 0))
+        {
+            findings.Add(new BuildReadinessFindingResponse(
+                "warning",
+                "runtime_pose_timeline_missing",
+                $"{entry.ClipName} has no frame count, so pose samples cannot be planned accurately.",
+                entry.ClipId,
+                entry.ClipName));
+        }
+
+        var status = findings.Any(finding => finding.Severity == "error")
+            ? "error"
+            : findings.Any(finding => finding.Severity == "warning")
+                ? "warning"
+                : "ok";
+        return new RuntimePoseDraftResponse(
+            status,
+            entries.Length,
+            entries.Sum(entry => entry.PlannedSampleCount),
+            entries,
+            findings);
+    }
+
+    private static RuntimeFeatureDraftResponse BuildRuntimeFeatureDraft(
+        IReadOnlyList<string> featurePreset,
+        RuntimePoseDraftResponse poseDraft)
+    {
+        var channels = featurePreset
+            .Select(ParseRuntimeFeatureChannel)
+            .ToArray();
+        var clips = poseDraft.Clips
+            .Select(clip => new RuntimeFeatureClipResponse(
+                clip.ClipId,
+                clip.ClipName,
+                clip.IsMirrored,
+                clip.PlannedSampleCount))
+            .ToArray();
+        var findings = new List<BuildReadinessFindingResponse>();
+        if (channels.Length == 0)
+        {
+            findings.Add(BuildFinding(
+                "error",
+                "runtime_features_empty",
+                "Runtime feature draft has no feature channels.",
+                null));
+        }
+
+        if (poseDraft.PlannedPoseSampleCount == 0)
+        {
+            findings.Add(BuildFinding(
+                "error",
+                "runtime_features_no_pose_samples",
+                "Runtime feature draft has no pose samples to evaluate.",
+                null));
+        }
+
+        var status = findings.Any(finding => finding.Severity == "error")
+            ? "error"
+            : poseDraft.Status == "warning"
+                ? "warning"
+                : "ok";
+        return new RuntimeFeatureDraftResponse(
+            status,
+            channels.Length,
+            poseDraft.PlannedPoseSampleCount,
+            channels,
+            clips,
+            findings);
+    }
+
+    private static RuntimeFeatureChannelResponse ParseRuntimeFeatureChannel(string feature)
+    {
+        var name = feature;
+        var boneSlot = (string?)null;
+        if (feature.Contains(':', StringComparison.Ordinal))
+        {
+            var parts = feature.Split(':', 2);
+            name = parts[0];
+            boneSlot = parts[1];
+        }
+
+        var trajectoryFrames = Array.Empty<int>();
+        var bracketStart = name.IndexOf('[', StringComparison.Ordinal);
+        var bracketEnd = name.IndexOf(']', StringComparison.Ordinal);
+        if (bracketStart >= 0 && bracketEnd > bracketStart)
+        {
+            var frameText = name[(bracketStart + 1)..bracketEnd];
+            trajectoryFrames = frameText
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(frame => int.TryParse(frame, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0)
+                .Where(frame => frame > 0)
+                .ToArray();
+            name = name[..bracketStart];
+        }
+
+        var kind = name.Contains("trajectory", StringComparison.OrdinalIgnoreCase)
+            ? "trajectory"
+            : name.Contains("velocity", StringComparison.OrdinalIgnoreCase)
+                ? "velocity"
+                : "position";
+        return new RuntimeFeatureChannelResponse(name, kind, boneSlot, trajectoryFrames);
     }
 
     private static string ComputeReadinessFingerprint(BuildReadinessResponse buildReadiness)
@@ -1662,6 +1810,18 @@ public sealed class BrowserWorkspaceService
     {
         var characterFolderName = GetCharacterFolderName(reference);
         return ToPortablePath("Builds", characterFolderName, $"{characterFolderName}.mmskeleton");
+    }
+
+    private static string GetRuntimePoseDraftPath(CharacterReference reference)
+    {
+        var characterFolderName = GetCharacterFolderName(reference);
+        return ToPortablePath("Builds", characterFolderName, $"{characterFolderName}.mmpose");
+    }
+
+    private static string GetRuntimeFeatureDraftPath(CharacterReference reference)
+    {
+        var characterFolderName = GetCharacterFolderName(reference);
+        return ToPortablePath("Builds", characterFolderName, $"{characterFolderName}.mmfeatures");
     }
 
     private static string ToAssetUrl(params string[] parts)

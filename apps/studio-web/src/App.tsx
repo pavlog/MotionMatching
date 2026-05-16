@@ -1099,6 +1099,10 @@ function RuntimeDraftView({
           <dd>{draft.sourceReportPath}</dd>
           <dt>Skeleton</dt>
           <dd>{`${draft.skeleton.status}, ${draft.skeleton.boneCount} bones`}</dd>
+          <dt>Poses</dt>
+          <dd>{`${draft.poses.status}, ${draft.poses.plannedPoseSampleCount} samples`}</dd>
+          <dt>Features</dt>
+          <dd>{`${draft.features.status}, ${draft.features.featureCount} channels`}</dd>
           <dt>Included</dt>
           <dd>{readiness.includedClipCount}</dd>
           <dt>Planned</dt>
@@ -1132,11 +1136,37 @@ function RuntimeDraftView({
       <section className="report-section">
         <h3>Feature Preset</h3>
         <div className="report-table">
-          {draft.featurePreset.map((feature) => (
-            <div key={feature} className="report-row single">
-              <span>{feature}</span>
+          {draft.features.channels.map((channel) => (
+            <div key={`${channel.name}-${channel.boneSlot ?? 'none'}`} className="report-row">
+              <span>{channel.name}</span>
+              <span>{channel.kind}</span>
+              <span>{channel.trajectoryFrames.length ? `${channel.boneSlot ?? '--'} +${channel.trajectoryFrames.join('/')}f` : channel.boneSlot ?? '--'}</span>
             </div>
           ))}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Pose Samples</h3>
+        <div className="report-table">
+          {draft.poses.clips.length ? draft.poses.clips.map((clip) => (
+            <div key={`${clip.clipId}-${clip.isMirrored ? 'mirror' : 'source'}`} className={`report-row ${clip.plannedSampleCount > 0 ? 'ok' : 'warning'}`}>
+              <span>{clip.clipName}</span>
+              <span>{clip.clipRole ?? 'Unassigned'}{clip.isMirrored ? ' mirror' : ''}</span>
+              <span>{`${clip.plannedSampleCount} samples${clip.frameRate ? ` @ ${formatNumber(clip.frameRate)} fps` : ''}`}</span>
+            </div>
+          )) : <p>No pose samples planned</p>}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Feature Samples</h3>
+        <div className="report-table">
+          {draft.features.clips.length ? draft.features.clips.map((clip) => (
+            <div key={`${clip.clipId}-${clip.isMirrored ? 'mirror' : 'source'}`} className={`report-row ${clip.plannedSampleCount > 0 ? 'ok' : 'warning'}`}>
+              <span>{clip.clipName}</span>
+              <span>{clip.isMirrored ? 'Mirrored' : 'Source'}</span>
+              <span>{`${clip.plannedSampleCount} samples x ${draft.features.featureCount} channels`}</span>
+            </div>
+          )) : <p>No feature samples planned</p>}
         </div>
       </section>
       <section className="report-section">
@@ -1154,6 +1184,20 @@ function RuntimeDraftView({
       <section className="report-section">
         <h3>Skeleton Bones</h3>
         <p>{draft.skeleton.boneNames.length ? draft.skeleton.boneNames.join(', ') : 'No bones'}</p>
+      </section>
+      <section className="report-section">
+        <h3>Runtime Findings</h3>
+        <div className="report-table">
+          {[...draft.skeleton.findings, ...draft.poses.findings, ...draft.features.findings].length ? (
+            [...draft.skeleton.findings, ...draft.poses.findings, ...draft.features.findings].map((finding, index) => (
+              <div key={`${finding.severity}-${finding.code}-${index}`} className={`report-row ${finding.severity}`}>
+                <span>{finding.clipName ?? 'Runtime'}</span>
+                <span>{finding.code}</span>
+                <span>{finding.message}</span>
+              </div>
+            ))
+          ) : <p>No runtime draft findings</p>}
+        </div>
       </section>
       <section className="report-section">
         <h3>Raw JSON</h3>

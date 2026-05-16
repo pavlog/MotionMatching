@@ -168,6 +168,8 @@ export interface RuntimeBuildDraftResponse {
   featurePreset: string[]
   artifacts: RuntimeBuildArtifactResponse[]
   skeleton: RuntimeSkeletonDraftResponse
+  poses: RuntimePoseDraftResponse
+  features: RuntimeFeatureDraftResponse
   buildReadiness: BuildReadinessResponse
 }
 
@@ -190,6 +192,48 @@ export interface RuntimeSkeletonSlotResponse {
   slot: string
   boneName: string | null
   status: 'matched' | 'missing'
+}
+
+export interface RuntimePoseDraftResponse {
+  status: 'ok' | 'warning' | 'error'
+  clipCount: number
+  plannedPoseSampleCount: number
+  clips: RuntimePoseClipDraftResponse[]
+  findings: BuildReadinessFindingResponse[]
+}
+
+export interface RuntimePoseClipDraftResponse {
+  clipId: string
+  clipName: string
+  clipRole: string | null
+  isMirrored: boolean
+  frameCount: number | null
+  frameRate: number | null
+  durationSeconds: number | null
+  plannedSampleCount: number
+}
+
+export interface RuntimeFeatureDraftResponse {
+  status: 'ok' | 'warning' | 'error'
+  featureCount: number
+  plannedSampleCount: number
+  channels: RuntimeFeatureChannelResponse[]
+  clips: RuntimeFeatureClipResponse[]
+  findings: BuildReadinessFindingResponse[]
+}
+
+export interface RuntimeFeatureChannelResponse {
+  name: string
+  kind: string
+  boneSlot: string | null
+  trajectoryFrames: number[]
+}
+
+export interface RuntimeFeatureClipResponse {
+  clipId: string
+  clipName: string
+  isMirrored: boolean
+  plannedSampleCount: number
 }
 
 export type BuildReportStatus = 'none' | 'current' | 'outdated'

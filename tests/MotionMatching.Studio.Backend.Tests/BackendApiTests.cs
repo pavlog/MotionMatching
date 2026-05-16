@@ -456,11 +456,18 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"boneNames\":[\"Hips\",\"Spine\",\"Head\",\"LeftUpLeg\",\"RightUpLeg\"]", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmpose\"", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmfeatures\"", draftJson);
+        Assert.Contains("\"plannedPoseSampleCount\":42", draftJson);
+        Assert.Contains("\"featureCount\":7", draftJson);
+        Assert.Contains("\"name\":\"trajectory_position\"", draftJson);
 
         var draftPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "runtime-build-draft.json");
         var skeletonPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmskeleton");
+        var posePath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmpose");
+        var featurePath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmfeatures");
         Assert.True(File.Exists(draftPath));
         Assert.True(File.Exists(skeletonPath));
+        Assert.True(File.Exists(posePath));
+        Assert.True(File.Exists(featurePath));
 
         var persistedDraftJson = await File.ReadAllTextAsync(draftPath);
         Assert.Contains("\"trajectory_position[20,40,60]:simulation_bone\"", persistedDraftJson);
@@ -472,6 +479,16 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"slot\": \"hips\"", persistedSkeletonJson);
         Assert.DoesNotContain(_workspaceRoot, persistedSkeletonJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedSkeletonJson);
+        var persistedPoseJson = await File.ReadAllTextAsync(posePath);
+        Assert.Contains("\"clipName\": \"RunForward\"", persistedPoseJson);
+        Assert.Contains("\"plannedSampleCount\": 42", persistedPoseJson);
+        Assert.DoesNotContain(_workspaceRoot, persistedPoseJson);
+        Assert.DoesNotContain(Path.GetTempPath(), persistedPoseJson);
+        var persistedFeatureJson = await File.ReadAllTextAsync(featurePath);
+        Assert.Contains("\"featureCount\": 7", persistedFeatureJson);
+        Assert.Contains("\"boneSlot\": \"simulation_bone\"", persistedFeatureJson);
+        Assert.DoesNotContain(_workspaceRoot, persistedFeatureJson);
+        Assert.DoesNotContain(Path.GetTempPath(), persistedFeatureJson);
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "build-report.json")));
 
         var workspaceResponse = await client.GetAsync("/api/v1/workspaces/browser");
