@@ -181,12 +181,13 @@ app.MapGet("/api/v1/workspaces/browser/characters/{characterId}/build-report", a
 
 app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft", async (
     string characterId,
+    int? sampleFrameStep,
     BrowserWorkspaceService workspaceService,
     CancellationToken cancellationToken) =>
 {
     try
     {
-        var result = await workspaceService.GenerateRuntimeBuildDraftAsync(characterId, cancellationToken);
+        var result = await workspaceService.GenerateRuntimeBuildDraftAsync(characterId, sampleFrameStep, cancellationToken);
         return Results.Ok(result);
     }
     catch (KeyNotFoundException exception)

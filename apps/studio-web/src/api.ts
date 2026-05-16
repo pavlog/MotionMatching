@@ -165,6 +165,7 @@ export interface RuntimeBuildDraftResponse {
   draftPath: string
   generatedAtUtc: string
   sourceReportPath: string
+  sampleFrameStep: number
   featurePreset: string[]
   artifacts: RuntimeBuildArtifactResponse[]
   skeleton: RuntimeSkeletonDraftResponse
@@ -196,6 +197,7 @@ export interface RuntimeSkeletonSlotResponse {
 
 export interface RuntimePoseDraftResponse {
   status: 'ok' | 'warning' | 'error'
+  sampleFrameStep: number
   clipCount: number
   plannedPoseSampleCount: number
   clips: RuntimePoseClipDraftResponse[]
@@ -211,14 +213,17 @@ export interface RuntimePoseClipDraftResponse {
   frameRate: number | null
   durationSeconds: number | null
   plannedSampleCount: number
+  sampleFramesPreview: number[]
 }
 
 export interface RuntimeFeatureDraftResponse {
   status: 'ok' | 'warning' | 'error'
+  sampleFrameStep: number
   featureCount: number
   plannedSampleCount: number
   channels: RuntimeFeatureChannelResponse[]
   clips: RuntimeFeatureClipResponse[]
+  samplePreviews: RuntimeFeatureSamplePreviewResponse[]
   findings: BuildReadinessFindingResponse[]
 }
 
@@ -234,6 +239,15 @@ export interface RuntimeFeatureClipResponse {
   clipName: string
   isMirrored: boolean
   plannedSampleCount: number
+}
+
+export interface RuntimeFeatureSamplePreviewResponse {
+  clipId: string
+  clipName: string
+  isMirrored: boolean
+  frame: number
+  seconds: number
+  values: Record<string, number | null>
 }
 
 export type BuildReportStatus = 'none' | 'current' | 'outdated'
@@ -404,8 +418,9 @@ export async function getBuildReport(characterId: string): Promise<BuildReportRe
   return response.json()
 }
 
-export async function generateRuntimeBuildDraft(characterId: string): Promise<RuntimeBuildDraftResponse> {
-  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/runtime-build-draft`, {
+export async function generateRuntimeBuildDraft(characterId: string, sampleFrameStep = 1): Promise<RuntimeBuildDraftResponse> {
+  const search = new URLSearchParams({ sampleFrameStep: String(sampleFrameStep) })
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/runtime-build-draft?${search.toString()}`, {
     method: 'POST',
   })
 

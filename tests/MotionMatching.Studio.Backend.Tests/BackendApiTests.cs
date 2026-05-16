@@ -444,11 +444,12 @@ public sealed class BackendApiTests : IAsyncLifetime
         var clipResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/clips", clipForm);
         clipResponse.EnsureSuccessStatusCode();
 
-        var draftResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft", content: null);
+        var draftResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft?sampleFrameStep=2", content: null);
         var draftJson = await draftResponse.Content.ReadAsStringAsync();
 
         draftResponse.EnsureSuccessStatusCode();
         Assert.Contains("\"draftPath\":\"Builds/IyoMixamo/runtime-build-draft.json\"", draftJson);
+        Assert.Contains("\"sampleFrameStep\":2", draftJson);
         Assert.Contains("\"sourceReportPath\":\"Builds/IyoMixamo/build-report.json\"", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmskeleton\"", draftJson);
         Assert.Contains("\"status\":\"draft\"", draftJson);
@@ -456,9 +457,10 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"boneNames\":[\"Hips\",\"Spine\",\"Head\",\"LeftUpLeg\",\"RightUpLeg\"]", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmpose\"", draftJson);
         Assert.Contains("\"fileName\":\"IyoMixamo.mmfeatures\"", draftJson);
-        Assert.Contains("\"plannedPoseSampleCount\":42", draftJson);
+        Assert.Contains("\"plannedPoseSampleCount\":21", draftJson);
         Assert.Contains("\"featureCount\":7", draftJson);
         Assert.Contains("\"name\":\"trajectory_position\"", draftJson);
+        Assert.Contains("\"samplePreviews\"", draftJson);
 
         var draftPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "runtime-build-draft.json");
         var skeletonPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo.mmskeleton");
@@ -481,12 +483,15 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.DoesNotContain(Path.GetTempPath(), persistedSkeletonJson);
         var persistedPoseJson = await File.ReadAllTextAsync(posePath);
         Assert.Contains("\"clipName\": \"RunForward\"", persistedPoseJson);
-        Assert.Contains("\"plannedSampleCount\": 42", persistedPoseJson);
+        Assert.Contains("\"plannedSampleCount\": 21", persistedPoseJson);
+        Assert.Contains("\"sampleFramesPreview\": [", persistedPoseJson);
         Assert.DoesNotContain(_workspaceRoot, persistedPoseJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedPoseJson);
         var persistedFeatureJson = await File.ReadAllTextAsync(featurePath);
         Assert.Contains("\"featureCount\": 7", persistedFeatureJson);
         Assert.Contains("\"boneSlot\": \"simulation_bone\"", persistedFeatureJson);
+        Assert.Contains("\"sampleFrameStep\": 2", persistedFeatureJson);
+        Assert.Contains("\"values\": {", persistedFeatureJson);
         Assert.DoesNotContain(_workspaceRoot, persistedFeatureJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedFeatureJson);
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "build-report.json")));

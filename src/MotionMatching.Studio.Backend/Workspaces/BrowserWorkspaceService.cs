@@ -468,25 +468,28 @@ public sealed class BrowserWorkspaceService
 
     public async Task<RuntimeBuildDraftResponse> GenerateRuntimeBuildDraftAsync(
         string characterId,
+        int? sampleFrameStep,
         CancellationToken cancellationToken)
     {
         var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
         var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
             ?? throw new KeyNotFoundException("Character was not found.");
 
+        var normalizedSampleFrameStep = Math.Clamp(sampleFrameStep ?? 1, 1, 120);
         var report = await GenerateBuildReportAsync(characterId, cancellationToken);
         var characterFolderName = GetCharacterFolderName(reference);
         var draftPath = GetRuntimeBuildDraftPath(reference);
         var skeletonDraft = await BuildRuntimeSkeletonDraftAsync(reference, cancellationToken);
         var character = await ToCharacterResponseAsync(reference, cancellationToken);
-        var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips);
-        var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft);
+        var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips, normalizedSampleFrameStep);
+        var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft, character.Clips);
         var draft = new RuntimeBuildDraftResponse(
             report.CharacterId,
             report.CharacterName,
             draftPath,
             DateTimeOffset.UtcNow,
             report.ReportPath,
+            normalizedSampleFrameStep,
             RuntimeDraftFeaturePreset,
             [
                 new RuntimeBuildArtifactResponse($"{characterFolderName}.mmskeleton", "skeleton", skeletonDraft.Status == "error" ? "blocked" : "draft"),
@@ -1005,14 +1008,15 @@ public sealed class BrowserWorkspaceService
 
     private static RuntimePoseDraftResponse BuildRuntimePoseDraft(
         BuildReadinessResponse readiness,
-        IReadOnlyList<ClipResponse> clips)
+        IReadOnlyList<ClipResponse> clips,
+        int sampleFrameStep)
     {
         var clipsById = clips.ToDictionary(clip => clip.Id, StringComparer.Ordinal);
         var entries = readiness.PlanEntries
             .Select(entry =>
             {
                 clipsById.TryGetValue(entry.ClipId, out var clip);
-                var plannedSampleCount = Math.Max(clip?.FrameCount ?? 0, 0);
+                var plannedSampleCount = CalculateSampleCount(clip?.FrameCount, sampleFrameStep);
                 return new RuntimePoseClipDraftResponse(
                     entry.ClipId,
                     entry.ClipName,
@@ -1021,7 +1025,8 @@ public sealed class BrowserWorkspaceService
                     clip?.FrameCount,
                     clip?.FrameRate,
                     clip?.DurationSeconds,
-                    plannedSampleCount);
+                    plannedSampleCount,
+                    BuildSampleFramesPreview(clip?.FrameCount, sampleFrameStep));
             })
             .ToArray();
 
@@ -1052,6 +1057,7 @@ public sealed class BrowserWorkspaceService
                 : "ok";
         return new RuntimePoseDraftResponse(
             status,
+            sampleFrameStep,
             entries.Length,
             entries.Sum(entry => entry.PlannedSampleCount),
             entries,
@@ -1060,17 +1066,30 @@ public sealed class BrowserWorkspaceService
 
     private static RuntimeFeatureDraftResponse BuildRuntimeFeatureDraft(
         IReadOnlyList<string> featurePreset,
-        RuntimePoseDraftResponse poseDraft)
+        RuntimePoseDraftResponse poseDraft,
+        IReadOnlyList<ClipResponse> clips)
     {
+        var clipsById = clips.ToDictionary(clip => clip.Id, StringComparer.Ordinal);
         var channels = featurePreset
             .Select(ParseRuntimeFeatureChannel)
             .ToArray();
-        var clips = poseDraft.Clips
+        var featureClips = poseDraft.Clips
             .Select(clip => new RuntimeFeatureClipResponse(
                 clip.ClipId,
                 clip.ClipName,
                 clip.IsMirrored,
                 clip.PlannedSampleCount))
+            .ToArray();
+        var samplePreviews = poseDraft.Clips
+            .SelectMany(clip =>
+            {
+                clipsById.TryGetValue(clip.ClipId, out var sourceClip);
+                return clip.SampleFramesPreview.Select(frame => BuildRuntimeFeatureSamplePreview(
+                    clip,
+                    sourceClip,
+                    frame,
+                    channels));
+            })
             .ToArray();
         var findings = new List<BuildReadinessFindingResponse>();
         if (channels.Length == 0)
@@ -1098,11 +1117,129 @@ public sealed class BrowserWorkspaceService
                 : "ok";
         return new RuntimeFeatureDraftResponse(
             status,
+            poseDraft.SampleFrameStep,
             channels.Length,
             poseDraft.PlannedPoseSampleCount,
             channels,
-            clips,
+            featureClips,
+            samplePreviews,
             findings);
+    }
+
+    private static int CalculateSampleCount(int? frameCount, int sampleFrameStep)
+    {
+        if (frameCount is null || frameCount <= 0)
+        {
+            return 0;
+        }
+
+        return ((frameCount.Value - 1) / sampleFrameStep) + 1;
+    }
+
+    private static IReadOnlyList<int> BuildSampleFramesPreview(int? frameCount, int sampleFrameStep)
+    {
+        if (frameCount is null || frameCount <= 0)
+        {
+            return [];
+        }
+
+        var frames = new List<int>();
+        for (var frame = 0; frame < frameCount.Value && frames.Count < 8; frame += sampleFrameStep)
+        {
+            frames.Add(frame);
+        }
+
+        var lastFrame = frameCount.Value - 1;
+        if (frames.Count < 8 && !frames.Contains(lastFrame))
+        {
+            frames.Add(lastFrame);
+        }
+
+        return frames;
+    }
+
+    private static RuntimeFeatureSamplePreviewResponse BuildRuntimeFeatureSamplePreview(
+        RuntimePoseClipDraftResponse poseClip,
+        ClipResponse? sourceClip,
+        int frame,
+        IReadOnlyList<RuntimeFeatureChannelResponse> channels)
+    {
+        var seconds = ToSampleSeconds(sourceClip, frame);
+        var values = new Dictionary<string, double?>(StringComparer.Ordinal);
+        foreach (var channel in channels)
+        {
+            values[channel.Name] = EstimateFeatureValue(channel, sourceClip, frame, poseClip.IsMirrored);
+        }
+
+        return new RuntimeFeatureSamplePreviewResponse(
+            poseClip.ClipId,
+            poseClip.ClipName,
+            poseClip.IsMirrored,
+            frame,
+            seconds,
+            values);
+    }
+
+    private static double ToSampleSeconds(ClipResponse? clip, int frame)
+    {
+        if (clip?.FrameRate is > 0)
+        {
+            return frame / clip.FrameRate.Value;
+        }
+
+        if (clip?.FrameCount is > 1 && clip.DurationSeconds is > 0)
+        {
+            return frame / (clip.FrameCount.Value - 1.0) * clip.DurationSeconds.Value;
+        }
+
+        return 0;
+    }
+
+    private static double? EstimateFeatureValue(
+        RuntimeFeatureChannelResponse channel,
+        ClipResponse? clip,
+        int frame,
+        bool isMirrored)
+    {
+        if (clip is null)
+        {
+            return null;
+        }
+
+        if (channel.Name.Equals("hips_velocity", StringComparison.OrdinalIgnoreCase))
+        {
+            var speed = clip.RootMotion?.AverageHorizontalSpeed;
+            return speed is null ? null : Math.Round(speed.Value, 4);
+        }
+
+        if (channel.Name.Equals("left_foot_velocity", StringComparison.OrdinalIgnoreCase))
+        {
+            return EstimateFootVelocityPreview(clip, isMirrored ? "right" : "left", frame);
+        }
+
+        if (channel.Name.Equals("right_foot_velocity", StringComparison.OrdinalIgnoreCase))
+        {
+            return EstimateFootVelocityPreview(clip, isMirrored ? "left" : "right", frame);
+        }
+
+        return null;
+    }
+
+    private static double? EstimateFootVelocityPreview(ClipResponse clip, string foot, int frame)
+    {
+        if (clip.FootContacts is null)
+        {
+            return null;
+        }
+
+        var track = clip.FootContacts.Tracks.FirstOrDefault(item => item.Foot.Equals(foot, StringComparison.OrdinalIgnoreCase));
+        if (track is null)
+        {
+            return null;
+        }
+
+        var inContact = track.Ranges.Any(range => frame >= range.StartFrame && frame <= range.EndFrame);
+        return inContact ? 0 : Math.Round(clip.FootContacts.VelocityThreshold, 4);
     }
 
     private static RuntimeFeatureChannelResponse ParseRuntimeFeatureChannel(string feature)

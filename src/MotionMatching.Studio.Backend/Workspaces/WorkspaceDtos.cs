@@ -148,6 +148,7 @@ public sealed record RuntimeBuildDraftResponse(
     string DraftPath,
     DateTimeOffset GeneratedAtUtc,
     string SourceReportPath,
+    int SampleFrameStep,
     IReadOnlyList<string> FeaturePreset,
     IReadOnlyList<RuntimeBuildArtifactResponse> Artifacts,
     RuntimeSkeletonDraftResponse Skeleton,
@@ -175,6 +176,7 @@ public sealed record RuntimeSkeletonSlotResponse(
 
 public sealed record RuntimePoseDraftResponse(
     string Status,
+    int SampleFrameStep,
     int ClipCount,
     int PlannedPoseSampleCount,
     IReadOnlyList<RuntimePoseClipDraftResponse> Clips,
@@ -188,14 +190,17 @@ public sealed record RuntimePoseClipDraftResponse(
     int? FrameCount,
     double? FrameRate,
     double? DurationSeconds,
-    int PlannedSampleCount);
+    int PlannedSampleCount,
+    IReadOnlyList<int> SampleFramesPreview);
 
 public sealed record RuntimeFeatureDraftResponse(
     string Status,
+    int SampleFrameStep,
     int FeatureCount,
     int PlannedSampleCount,
     IReadOnlyList<RuntimeFeatureChannelResponse> Channels,
     IReadOnlyList<RuntimeFeatureClipResponse> Clips,
+    IReadOnlyList<RuntimeFeatureSamplePreviewResponse> SamplePreviews,
     IReadOnlyList<BuildReadinessFindingResponse> Findings);
 
 public sealed record RuntimeFeatureChannelResponse(
@@ -209,6 +214,14 @@ public sealed record RuntimeFeatureClipResponse(
     string ClipName,
     bool IsMirrored,
     int PlannedSampleCount);
+
+public sealed record RuntimeFeatureSamplePreviewResponse(
+    string ClipId,
+    string ClipName,
+    bool IsMirrored,
+    int Frame,
+    double Seconds,
+    IReadOnlyDictionary<string, double?> Values);
 
 public sealed record ImportLogEntryResponse(
     string Level,

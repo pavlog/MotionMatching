@@ -1057,6 +1057,7 @@
 }
 
 .setting-field select,
+.setting-field input,
 .custom-tag-row input {
   width: 100%;
   min-width: 0;

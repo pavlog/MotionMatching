@@ -106,6 +106,7 @@ function App() {
   const [characterContextMenu, setCharacterContextMenu] = useState<CharacterContextMenu | null>(null)
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
   const [lastRuntimeDraft, setLastRuntimeDraft] = useState<RuntimeBuildDraftResponse | null>(null)
+  const [runtimeSampleFrameStep, setRuntimeSampleFrameStep] = useState(1)
   const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([
     { id: 1, level: 'info', message: 'Ready' },
@@ -590,9 +591,9 @@ function App() {
 
   async function handleGenerateRuntimeBuildDraft(character: CharacterResponse) {
     setIsBusy(true)
-    appendLog(`Generating runtime build draft for ${character.name}`)
+    appendLog(`Generating runtime build draft for ${character.name} at step ${runtimeSampleFrameStep}`)
     try {
-      const draft = await generateRuntimeBuildDraft(character.id)
+      const draft = await generateRuntimeBuildDraft(character.id, runtimeSampleFrameStep)
       setLastRuntimeDraft(draft)
       setLastBuildReport({
         characterId: draft.characterId,
@@ -807,12 +808,14 @@ function App() {
             isBusy={isBusy}
             lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
             lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
+            runtimeSampleFrameStep={runtimeSampleFrameStep}
             hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
             hasRuntimeDraft={Boolean((lastRuntimeDraft?.characterId === selectedCharacter.id && lastRuntimeDraft) || selectedCharacter.runtimeBuildDraftPath)}
             onGenerateBuildReport={() => handleGenerateBuildReport(selectedCharacter)}
             onGenerateRuntimeBuildDraft={() => handleGenerateRuntimeBuildDraft(selectedCharacter)}
             onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
             onViewRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
+            onRuntimeSampleFrameStepChange={setRuntimeSampleFrameStep}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
           />
         ) : (
@@ -1097,6 +1100,8 @@ function RuntimeDraftView({
           <dd>{formatReportDate(draft.generatedAtUtc)}</dd>
           <dt>Source report</dt>
           <dd>{draft.sourceReportPath}</dd>
+          <dt>Sample step</dt>
+          <dd>{draft.sampleFrameStep}</dd>
           <dt>Skeleton</dt>
           <dd>{`${draft.skeleton.status}, ${draft.skeleton.boneCount} bones`}</dd>
           <dt>Poses</dt>
@@ -1152,7 +1157,7 @@ function RuntimeDraftView({
             <div key={`${clip.clipId}-${clip.isMirrored ? 'mirror' : 'source'}`} className={`report-row ${clip.plannedSampleCount > 0 ? 'ok' : 'warning'}`}>
               <span>{clip.clipName}</span>
               <span>{clip.clipRole ?? 'Unassigned'}{clip.isMirrored ? ' mirror' : ''}</span>
-              <span>{`${clip.plannedSampleCount} samples${clip.frameRate ? ` @ ${formatNumber(clip.frameRate)} fps` : ''}`}</span>
+              <span>{`${clip.plannedSampleCount} samples, F ${clip.sampleFramesPreview.join(', ') || '--'}`}</span>
             </div>
           )) : <p>No pose samples planned</p>}
         </div>
@@ -1167,6 +1172,18 @@ function RuntimeDraftView({
               <span>{`${clip.plannedSampleCount} samples x ${draft.features.featureCount} channels`}</span>
             </div>
           )) : <p>No feature samples planned</p>}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Feature Value Preview</h3>
+        <div className="report-table">
+          {draft.features.samplePreviews.length ? draft.features.samplePreviews.slice(0, 18).map((sample, index) => (
+            <div key={`${sample.clipId}-${sample.isMirrored ? 'mirror' : 'source'}-${sample.frame}-${index}`} className="report-row">
+              <span>{`${sample.clipName}${sample.isMirrored ? ' Mirror' : ''} F${sample.frame + 1}`}</span>
+              <span>{`${formatNumber(sample.seconds)}s`}</span>
+              <span>{formatFeaturePreviewValues(sample.values)}</span>
+            </div>
+          )) : <p>No feature value preview</p>}
         </div>
       </section>
       <section className="report-section">
@@ -1808,6 +1825,16 @@ function formatBoneList(values: string[]) {
   return values.length ? values.join(', ') : '--'
 }
 
+function formatFeaturePreviewValues(values: Record<string, number | null>) {
+  const visibleEntries = Object.entries(values)
+    .filter(([name, value]) => value !== null && (name === 'hips_velocity' || name.endsWith('_foot_velocity')))
+    .slice(0, 4)
+
+  return visibleEntries.length
+    ? visibleEntries.map(([name, value]) => `${name} ${formatNumber(value ?? Number.NaN)}`).join(', ')
+    : '--'
+}
+
 function formatBuildReportStatus(status: CharacterResponse['buildReportStatus']) {
   if (status === 'current') {
     return 'Report current'
@@ -2022,10 +2049,12 @@ function CharacterInspector({
   hasRuntimeDraft,
   lastBuildReport,
   lastRuntimeDraft,
+  runtimeSampleFrameStep,
   onGenerateBuildReport,
   onGenerateRuntimeBuildDraft,
   onViewBuildReport,
   onViewRuntimeDraft,
+  onRuntimeSampleFrameStepChange,
   onSelectClip,
 }: {
   character: CharacterResponse
@@ -2034,10 +2063,12 @@ function CharacterInspector({
   hasRuntimeDraft: boolean
   lastBuildReport: BuildReportResponse | null
   lastRuntimeDraft: RuntimeBuildDraftResponse | null
+  runtimeSampleFrameStep: number
   onGenerateBuildReport: () => void
   onGenerateRuntimeBuildDraft: () => void
   onViewBuildReport: () => void
   onViewRuntimeDraft: () => void
+  onRuntimeSampleFrameStepChange: (value: number) => void
   onSelectClip: (clipId: string) => void
 }) {
   return (
@@ -2060,6 +2091,18 @@ function CharacterInspector({
         <dt>Runtime</dt>
         <dd>{formatRuntimeDraftStatus(character.runtimeBuildDraftStatus)}</dd>
       </dl>
+        <label className="setting-field">
+          Runtime sample step
+          <input
+            type="number"
+            min={1}
+            max={120}
+            step={1}
+            value={runtimeSampleFrameStep}
+            disabled={isBusy}
+            onChange={(event) => onRuntimeSampleFrameStepChange(Math.min(Math.max(Math.round(Number(event.target.value) || 1), 1), 120))}
+          />
+        </label>
         <button
           type="button"
           className="inspector-action"
