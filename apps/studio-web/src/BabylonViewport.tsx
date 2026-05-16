@@ -21,7 +21,7 @@ import {
   Vector3,
 } from '@babylonjs/core'
 import '@babylonjs/loaders/glTF'
-import type { FootContactDiagnosticsResponse, SamplingQueryResponse } from './api'
+import type { FootContactDiagnosticsResponse, RuntimePoseSampleResponse, SamplingQueryResponse } from './api'
 
 interface BabylonViewportProps {
   previewUrl: string | null
@@ -34,6 +34,7 @@ interface BabylonViewportProps {
   clipMotionMode: ClipMotionMode
   samplingPreview: boolean
   samplingQuery: SamplingQueryResponse | null
+  samplingGhostPose: RuntimePoseSampleResponse | null
   label: string
   onClipMotionModeChange?: (mode: ClipMotionMode) => void
   onAnimationStateChange?: (state: string) => void
@@ -89,6 +90,7 @@ export function BabylonViewport({
   clipMotionMode,
   samplingPreview,
   samplingQuery,
+  samplingGhostPose,
   label,
   onClipMotionModeChange,
   onAnimationStateChange,
@@ -105,6 +107,7 @@ export function BabylonViewport({
   const showFootContactsRef = useRef(true)
   const contactMarkersRef = useRef<Partial<Record<FootName, Mesh>>>({})
   const samplingPreviewMeshesRef = useRef<Mesh[]>([])
+  const samplingGhostPoseMeshesRef = useRef<Mesh[]>([])
   const samplingPreviewRef = useRef(samplingPreview)
   const samplingQueryRef = useRef<SamplingQueryResponse | null>(samplingQuery)
   const samplingDragRef = useRef<SamplingDragState | null>(null)
@@ -530,6 +533,8 @@ export function BabylonViewport({
       contactMarkersRef.current = {}
       disposeSamplingPreview(samplingPreviewMeshesRef.current)
       samplingPreviewMeshesRef.current = []
+      disposeSamplingPreview(samplingGhostPoseMeshesRef.current)
+      samplingGhostPoseMeshesRef.current = []
       scene.dispose()
       engine.dispose()
       sceneRef.current = null
@@ -699,6 +704,21 @@ export function BabylonViewport({
 
     samplingPreviewMeshesRef.current = createSamplingPreview(scene, samplingQuery)
   }, [modelVersion, samplingPreview, samplingQuery])
+
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) {
+      return
+    }
+
+    disposeSamplingPreview(samplingGhostPoseMeshesRef.current)
+    samplingGhostPoseMeshesRef.current = []
+    if (!samplingPreview || !samplingGhostPose) {
+      return
+    }
+
+    samplingGhostPoseMeshesRef.current = createSamplingGhostPose(scene, samplingGhostPose)
+  }, [modelVersion, samplingGhostPose, samplingPreview])
 
   return (
     <section className="viewport-panel" aria-label="3D viewport" data-animation-state={animationState}>
@@ -909,6 +929,48 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
 function pickSamplingDragPoint(scene: Scene) {
   const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => Boolean(mesh.metadata?.samplingDragPlane))
   return pick?.hit && pick.pickedPoint ? pick.pickedPoint : null
+}
+
+function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) {
+  const meshes: Mesh[] = []
+  const material = new StandardMaterial('sampling-ghost-pose-material', scene)
+  material.diffuseColor = new Color3(0.76, 0.9, 1)
+  material.emissiveColor = new Color3(0.18, 0.38, 0.58)
+  material.alpha = 0.42
+  material.disableDepthWrite = true
+
+  const visibleBones = pose.bones
+    .filter((bone) => bone.translation.length >= 3)
+    .filter((bone) => !bone.boneName.toLowerCase().includes('end'))
+    .slice(0, 72)
+
+  for (const [index, bone] of visibleBones.entries()) {
+    const position = vectorFromSamplingArray(bone.translation, Vector3.Zero())
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
+      continue
+    }
+
+    const marker = MeshBuilder.CreateSphere(`sampling-ghost-pose-${index}`, {
+      diameter: isMainGhostBone(bone.boneName) ? 4.6 : 2.8,
+      segments: 8,
+    }, scene)
+    marker.position = position
+    marker.material = material
+    marker.isPickable = false
+    meshes.push(marker)
+  }
+
+  return meshes
+}
+
+function isMainGhostBone(boneName: string) {
+  const normalized = boneName.toLowerCase()
+  return normalized.includes('hips') ||
+    normalized.includes('pelvis') ||
+    normalized.includes('spine') ||
+    normalized.includes('head') ||
+    normalized.includes('foot') ||
+    normalized.includes('hand')
 }
 
 function vectorFromSamplingArray(values: number[] | undefined, fallback: Vector3) {

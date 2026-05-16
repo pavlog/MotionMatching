@@ -1079,6 +1079,11 @@
   background: var(--surface-3);
 }
 
+.sampling-match-row.active {
+  border-color: rgba(139, 216, 166, 0.58);
+  background: rgba(139, 216, 166, 0.12);
+}
+
 .sampling-match-row strong,
 .sampling-match-row span {
   min-width: 0;

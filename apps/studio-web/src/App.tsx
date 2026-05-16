@@ -143,6 +143,7 @@ function App() {
   const [samplingDrafts, setSamplingDrafts] = useState<Record<string, SamplingQueryResponse>>({})
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
   const [lastRuntimeDraft, setLastRuntimeDraft] = useState<RuntimeBuildDraftResponse | null>(null)
+  const [selectedSamplingMatch, setSelectedSamplingMatch] = useState<SamplingMatcherPreviewMatch | null>(null)
   const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
   const [runtimeSettingsSaveState, setRuntimeSettingsSaveState] = useState<{ characterId: string; state: 'saving' | 'saved' | 'failed' } | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([
@@ -176,6 +177,17 @@ function App() {
   const savedVisibleSampling = selectedSampling ?? selectedCharacter?.samplings[0] ?? null
   const visibleSampling = savedVisibleSampling ? samplingDrafts[savedVisibleSampling.id] ?? savedVisibleSampling : null
   const isSamplingPreviewActive = Boolean(selectedCharacter && !selectedClip && characterInspectorTab === 'sampling')
+  const selectedSamplingGhostPose = useMemo(() => {
+    if (!selectedSamplingMatch || !lastRuntimeDraft || lastRuntimeDraft.characterId !== selectedCharacter?.id) {
+      return null
+    }
+
+    return lastRuntimeDraft.database.poseSamples.find((sample) => (
+      sample.clipId === selectedSamplingMatch.clipId &&
+      sample.isMirrored === selectedSamplingMatch.isMirrored &&
+      sample.frame === selectedSamplingMatch.frame
+    )) ?? null
+  }, [lastRuntimeDraft, selectedCharacter?.id, selectedSamplingMatch])
 
   useEffect(() => {
     timelineFrameRef.current = visibleTimelineFrame
@@ -247,6 +259,11 @@ function App() {
     selectClipFrame(characterId, match.clipId, match.frame)
     appendLog(`Opened matcher result ${match.clipName} F${match.frame + 1}${match.isMirrored ? ' (mirrored source)' : ''}`)
   }, [appendLog, selectClipFrame])
+
+  const previewMatcherSample = useCallback((match: SamplingMatcherPreviewMatch) => {
+    setSelectedSamplingMatch(match)
+    appendLog(`Previewing matcher ghost ${match.clipName} F${match.frame + 1}${match.isMirrored ? ' Mirror' : ''}`)
+  }, [appendLog])
 
   const selectSampling = useCallback((characterId: string, samplingId: string) => {
     resetTimeline()
@@ -1137,6 +1154,7 @@ function App() {
           clipMotionMode={clipMotionMode}
           samplingPreview={isSamplingPreviewActive}
           samplingQuery={visibleSampling}
+          samplingGhostPose={isSamplingPreviewActive ? selectedSamplingGhostPose : null}
           label={selectedClip ? `${selectedCharacter?.name ?? 'Character'} / ${selectedClip.name}` : selectedCharacter?.name ?? 'Empty scene'}
           onClipMotionModeChange={setClipMotionMode}
           onAnimationStateChange={setAnimationPreviewState}
@@ -1190,6 +1208,8 @@ function App() {
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
+            selectedMatcherKey={selectedSamplingMatch ? samplingMatcherPreviewKey(selectedSamplingMatch) : null}
+            onPreviewMatcherSample={previewMatcherSample}
             onSelectMatcherSample={(match) => selectMatcherSample(selectedCharacter.id, match)}
           />
         ) : (
@@ -2596,6 +2616,10 @@ function runtimeDatabaseSampleKey(sample: { clipId: string; isMirrored: boolean;
   return `${runtimeClipKey(sample.clipId, sample.isMirrored)}:${sample.frame}`
 }
 
+function samplingMatcherPreviewKey(match: SamplingMatcherPreviewMatch) {
+  return runtimeDatabaseSampleKey(match)
+}
+
 function formatPoseBonePreview(bones: Array<{ boneName: string; translation: number[]; rotation: number[] }>) {
   const bone = bones[0]
   if (!bone) {
@@ -3037,6 +3061,8 @@ function CharacterInspector({
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
   onSelectClip,
+  selectedMatcherKey,
+  onPreviewMatcherSample,
   onSelectMatcherSample,
 }: {
   character: CharacterResponse
@@ -3065,6 +3091,8 @@ function CharacterInspector({
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
   onSelectClip: (clipId: string) => void
+  selectedMatcherKey: string | null
+  onPreviewMatcherSample: (match: SamplingMatcherPreviewMatch) => void
   onSelectMatcherSample: (match: SamplingMatcherPreviewMatch) => void
 }) {
   return (
@@ -3176,6 +3204,8 @@ function CharacterInspector({
             onLoadRuntimeDraft={onLoadRuntimeDraft}
             onDraftChange={onSamplingDraftChange}
             onUpdateSampling={onUpdateSampling}
+            selectedMatchKey={selectedMatcherKey}
+            onPreviewMatch={onPreviewMatcherSample}
             onSelectMatch={onSelectMatcherSample}
           />
         )}
@@ -3221,6 +3251,8 @@ function SamplingInspector({
   onLoadRuntimeDraft,
   onDraftChange,
   onUpdateSampling,
+  selectedMatchKey,
+  onPreviewMatch,
   onSelectMatch,
 }: {
   character: CharacterResponse
@@ -3233,6 +3265,8 @@ function SamplingInspector({
   onLoadRuntimeDraft: () => void
   onDraftChange: (query: SamplingQueryResponse) => void
   onUpdateSampling: (samplingId: string, update: SamplingQueryUpdateRequest) => void
+  selectedMatchKey: string | null
+  onPreviewMatch: (match: SamplingMatcherPreviewMatch) => void
   onSelectMatch: (match: SamplingMatcherPreviewMatch) => void
 }) {
   const runtimeScale = runtimeDraft
@@ -3465,9 +3499,10 @@ function SamplingInspector({
                 <button
                   key={`${match.clipId}-${match.isMirrored ? 'mirror' : 'source'}-${match.frame}`}
                   type="button"
-                  className="sampling-match-row"
-                  title={`${match.matchedFeatureCount} feature channels compared`}
-                  onClick={() => onSelectMatch(match)}
+                  className={`sampling-match-row ${selectedMatchKey === samplingMatcherPreviewKey(match) ? 'active' : ''}`}
+                  title={`${match.matchedFeatureCount} feature channels compared. Double click opens the clip frame.`}
+                  onClick={() => onPreviewMatch(match)}
+                  onDoubleClick={() => onSelectMatch(match)}
                 >
                   <span>{index + 1}</span>
                   <strong>{`${match.clipName}${match.isMirrored ? ' Mirror' : ''}`}</strong>
