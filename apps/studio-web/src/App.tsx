@@ -1178,6 +1178,7 @@ function App() {
             hasRuntimeDraft={Boolean((lastRuntimeDraft?.characterId === selectedCharacter.id && lastRuntimeDraft) || selectedCharacter.runtimeBuildDraftPath)}
             onGenerateBuildReport={() => handleGenerateBuildReport(selectedCharacter)}
             onGenerateRuntimeBuildDraft={() => handleGenerateRuntimeBuildDraft(selectedCharacter)}
+            onLoadRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
             onViewBuildReport={() => handleViewBuildReport(selectedCharacter)}
             onViewRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
             onViewRuntimeDatabaseDraft={() => handleViewRuntimeDatabaseDraft(selectedCharacter)}
@@ -2664,6 +2665,15 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
     .slice(0, 5)
 }
 
+function countSamplingRoleCandidates(query: SamplingQueryResponse, database: RuntimeDatabaseDraftResponse) {
+  if (!query.roleFilter) {
+    return database.samples.length
+  }
+
+  const clipLookup = new Map(database.clips.map((clip) => [runtimeClipKey(clip.clipId, clip.isMirrored), clip]))
+  return database.samples.filter((sample) => clipLookup.get(runtimeClipKey(sample.clipId, sample.isMirrored))?.clipRole === query.roleFilter).length
+}
+
 function buildSamplingQueryFeatureValues(query: SamplingQueryResponse, normalizationFactor: number) {
   const facing = normalizeVector2(query.facing[0] ?? 0, query.facing[2] ?? 1)
   const velocityX = query.velocity[0] ?? 0
@@ -3015,6 +3025,7 @@ function CharacterInspector({
   runtimeSettingsSaveState,
   onGenerateBuildReport,
   onGenerateRuntimeBuildDraft,
+  onLoadRuntimeDraft,
   onViewBuildReport,
   onViewRuntimeDraft,
   onViewRuntimeDatabaseDraft,
@@ -3042,6 +3053,7 @@ function CharacterInspector({
   runtimeSettingsSaveState: 'idle' | 'saving' | 'saved' | 'failed'
   onGenerateBuildReport: () => void
   onGenerateRuntimeBuildDraft: () => void
+  onLoadRuntimeDraft: () => void
   onViewBuildReport: () => void
   onViewRuntimeDraft: () => void
   onViewRuntimeDatabaseDraft: () => void
@@ -3158,7 +3170,10 @@ function CharacterInspector({
             sampling={selectedSampling ?? character.samplings[0] ?? null}
             draft={selectedSamplingDraft}
             runtimeDraft={lastRuntimeDraft}
+            hasRuntimeDraft={hasRuntimeDraft}
             isBusy={isBusy}
+            onGenerateRuntimeBuildDraft={onGenerateRuntimeBuildDraft}
+            onLoadRuntimeDraft={onLoadRuntimeDraft}
             onDraftChange={onSamplingDraftChange}
             onUpdateSampling={onUpdateSampling}
             onSelectMatch={onSelectMatcherSample}
@@ -3200,7 +3215,10 @@ function SamplingInspector({
   sampling,
   draft,
   runtimeDraft,
+  hasRuntimeDraft,
   isBusy,
+  onGenerateRuntimeBuildDraft,
+  onLoadRuntimeDraft,
   onDraftChange,
   onUpdateSampling,
   onSelectMatch,
@@ -3209,7 +3227,10 @@ function SamplingInspector({
   sampling: SamplingQueryResponse | null
   draft: SamplingQueryResponse | null
   runtimeDraft: RuntimeBuildDraftResponse | null
+  hasRuntimeDraft: boolean
   isBusy: boolean
+  onGenerateRuntimeBuildDraft: () => void
+  onLoadRuntimeDraft: () => void
   onDraftChange: (query: SamplingQueryResponse) => void
   onUpdateSampling: (samplingId: string, update: SamplingQueryUpdateRequest) => void
   onSelectMatch: (match: SamplingMatcherPreviewMatch) => void
@@ -3221,6 +3242,10 @@ function SamplingInspector({
   const facingAngle = draft ? vectorToYawDegrees(draft.facing) : 0
   const matcherPreview = useMemo(
     () => draft && runtimeDraft ? buildSamplingMatcherPreview(draft, runtimeDraft.database) : [],
+    [draft, runtimeDraft],
+  )
+  const roleFilteredCandidateCount = useMemo(
+    () => draft && runtimeDraft ? countSamplingRoleCandidates(draft, runtimeDraft.database) : 0,
     [draft, runtimeDraft],
   )
 
@@ -3422,7 +3447,17 @@ function SamplingInspector({
         </>
       ) : null}
       <section className="sampling-match-section">
-        <h3>Matcher Preview</h3>
+        <div className="sampling-match-header">
+          <h3>Matcher Preview</h3>
+          <div className="sampling-match-actions">
+            <button type="button" className="mini-action" disabled={isBusy || !hasRuntimeDraft} onClick={onLoadRuntimeDraft}>
+              Load Runtime
+            </button>
+            <button type="button" className="mini-action" disabled={isBusy} onClick={onGenerateRuntimeBuildDraft}>
+              Build Runtime
+            </button>
+          </div>
+        </div>
         {runtimeDraft ? (
           matcherPreview.length ? (
             <div className="sampling-match-list">
@@ -3442,10 +3477,14 @@ function SamplingInspector({
               ))}
             </div>
           ) : (
-            <p className="muted">No database samples to match</p>
+            <p className="muted">
+              {roleFilteredCandidateCount === 0
+                ? `No database samples for role ${draft?.roleFilter ?? 'Any role'}`
+                : 'No database samples expose comparable query features'}
+            </p>
           )
         ) : (
-          <p className="muted">Build Runtime first to preview top matches from the database draft</p>
+          <p className="muted">{hasRuntimeDraft ? 'Load Runtime to show existing matcher rows' : 'Build Runtime first to create matcher rows'}</p>
         )}
       </section>
       <button type="button" className="inspector-action" disabled title="Export comes after generated sample recipes">

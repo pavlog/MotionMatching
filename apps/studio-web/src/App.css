@@ -1032,11 +1032,23 @@
   gap: 7px;
 }
 
+.sampling-match-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
 .sampling-match-section h3 {
   margin: 0;
   color: var(--text-0);
   font-size: 13px;
   font-weight: 650;
+}
+
+.sampling-match-actions {
+  display: flex;
+  gap: 5px;
 }
 
 .sampling-match-list {
