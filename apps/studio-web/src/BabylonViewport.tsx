@@ -57,8 +57,19 @@ type ViewportStatus =
   | { kind: 'ready' }
   | { kind: 'error'; message: string }
 type SamplingDragState = {
+  kind: 'trajectory'
   index: number
   marker: Mesh
+} | {
+  kind: 'facing'
+  marker: Mesh
+} | {
+  kind: 'capsuleHeight' | 'capsuleRadius'
+  marker: Mesh
+  startClientX: number
+  startClientY: number
+  startHeight: number
+  startRadius: number
 }
 
 const isoViewDirection = new Vector3(-1, 0.8, -1).normalize()
@@ -356,27 +367,81 @@ export function BabylonViewport({
 
       if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
         const pickedMesh = pointerInfo.pickInfo?.pickedMesh
+        const pointerEvent = pointerInfo.event as PointerEvent
         const trajectoryIndex = typeof pickedMesh?.metadata?.samplingTrajectoryIndex === 'number'
           ? pickedMesh.metadata.samplingTrajectoryIndex as number
           : null
-        if (trajectoryIndex === null || !(pickedMesh instanceof Mesh)) {
+        if (!(pickedMesh instanceof Mesh)) {
           return
         }
 
-        samplingDragRef.current = { index: trajectoryIndex, marker: pickedMesh }
-        camera.detachControl()
-        pointerInfo.event.preventDefault()
-        return
+        if (trajectoryIndex !== null) {
+          samplingDragRef.current = { kind: 'trajectory', index: trajectoryIndex, marker: pickedMesh }
+          camera.detachControl()
+          pointerInfo.event.preventDefault()
+          return
+        }
+
+        const dragKind = pickedMesh.metadata?.samplingDragKind
+        const currentQuery = samplingQueryRef.current
+        if (dragKind === 'facing') {
+          samplingDragRef.current = { kind: 'facing', marker: pickedMesh }
+          camera.detachControl()
+          pointerInfo.event.preventDefault()
+          return
+        }
+
+        if ((dragKind === 'capsuleHeight' || dragKind === 'capsuleRadius') && currentQuery) {
+          samplingDragRef.current = {
+            kind: dragKind,
+            marker: pickedMesh,
+            startClientX: pointerEvent.clientX,
+            startClientY: pointerEvent.clientY,
+            startHeight: currentQuery.capsule.height,
+            startRadius: currentQuery.capsule.radius,
+          }
+          camera.detachControl()
+          pointerInfo.event.preventDefault()
+          return
+        }
       }
 
       if (pointerInfo.type === PointerEventTypes.POINTERMOVE && samplingDragRef.current) {
+        const drag = samplingDragRef.current
+        const pointerEvent = pointerInfo.event as PointerEvent
+        if (drag.kind === 'capsuleHeight') {
+          const nextHeight = Math.max(drag.startRadius * 2 + 1, drag.startHeight - (pointerEvent.clientY - drag.startClientY) * 0.35)
+          drag.marker.position.y = nextHeight - drag.startRadius
+          pointerInfo.event.preventDefault()
+          return
+        }
+
+        if (drag.kind === 'capsuleRadius') {
+          const nextRadius = Math.max(1, Math.min(drag.startHeight * 0.49, drag.startRadius + (pointerEvent.clientX - drag.startClientX) * 0.18))
+          drag.marker.position.x = nextRadius
+          pointerInfo.event.preventDefault()
+          return
+        }
+
         const point = pickSamplingDragPoint(scene)
         if (!point) {
           return
         }
 
-        samplingDragRef.current.marker.position.x = point.x
-        samplingDragRef.current.marker.position.z = point.z
+        if (drag.kind === 'facing') {
+          const direction = new Vector3(point.x, 0, point.z)
+          if (direction.lengthSquared() > 0.0001) {
+            const normalized = direction.normalize()
+            const radius = Math.max((samplingQueryRef.current?.capsule.radius ?? 14) * 3.5, 24)
+            drag.marker.position.x = normalized.x * radius
+            drag.marker.position.z = normalized.z * radius
+          }
+          pointerInfo.event.preventDefault()
+          return
+        }
+
+        drag.marker.position.x = point.x
+        drag.marker.position.z = point.z
         pointerInfo.event.preventDefault()
         return
       }
@@ -390,22 +455,51 @@ export function BabylonViewport({
           return
         }
 
-        const nextTrajectory = currentQuery.trajectory.map((point, index) =>
-          index === drag.index
-            ? {
-                ...point,
-                position: [
-                  Number(drag.marker.position.x.toFixed(2)),
-                  0,
-                  Number(drag.marker.position.z.toFixed(2)),
-                ],
-              }
-            : point,
-        )
-        onSamplingQueryChangeRef.current?.({
-          ...currentQuery,
-          trajectory: nextTrajectory,
-        })
+        if (drag.kind === 'trajectory') {
+          const nextTrajectory = currentQuery.trajectory.map((point, index) =>
+            index === drag.index
+              ? {
+                  ...point,
+                  position: [
+                    Number(drag.marker.position.x.toFixed(2)),
+                    0,
+                    Number(drag.marker.position.z.toFixed(2)),
+                  ],
+                }
+              : point,
+          )
+          onSamplingQueryChangeRef.current?.({
+            ...currentQuery,
+            trajectory: nextTrajectory,
+          })
+        } else if (drag.kind === 'facing') {
+          const direction = new Vector3(drag.marker.position.x, 0, drag.marker.position.z)
+          const normalized = direction.lengthSquared() > 0.0001 ? direction.normalize() : new Vector3(0, 0, 1)
+          onSamplingQueryChangeRef.current?.({
+            ...currentQuery,
+            facing: [
+              Number(normalized.x.toFixed(3)),
+              0,
+              Number(normalized.z.toFixed(3)),
+            ],
+          })
+        } else if (drag.kind === 'capsuleHeight') {
+          onSamplingQueryChangeRef.current?.({
+            ...currentQuery,
+            capsule: {
+              ...currentQuery.capsule,
+              height: Number(Math.max(currentQuery.capsule.radius * 2 + 1, drag.marker.position.y + currentQuery.capsule.radius).toFixed(2)),
+            },
+          })
+        } else if (drag.kind === 'capsuleRadius') {
+          onSamplingQueryChangeRef.current?.({
+            ...currentQuery,
+            capsule: {
+              ...currentQuery.capsule,
+              radius: Number(Math.max(1, Math.min(currentQuery.capsule.height * 0.49, drag.marker.position.x)).toFixed(2)),
+            },
+          })
+        }
         pointerInfo.event.preventDefault()
       }
     })
@@ -708,6 +802,10 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
   trajectoryMaterial.diffuseColor = new Color3(1, 0.7, 0.22)
   trajectoryMaterial.emissiveColor = new Color3(0.4, 0.22, 0.04)
 
+  const handleMaterial = new StandardMaterial('sampling-handle-material', scene)
+  handleMaterial.diffuseColor = new Color3(0.92, 0.96, 1)
+  handleMaterial.emissiveColor = new Color3(0.32, 0.44, 0.58)
+
   const capsuleHeight = Math.max(samplingQuery?.capsule.height ?? 72, 1)
   const capsuleRadius = Math.max(samplingQuery?.capsule.radius ?? 14, 1)
   const capsuleBodyHeight = Math.max(capsuleHeight - capsuleRadius * 2, 1)
@@ -728,9 +826,22 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
     }, scene)
     cap.position.y = y
     cap.material = capsuleMaterial
-    cap.isPickable = false
+    cap.isPickable = name === 'top'
+    if (name === 'top') {
+      cap.metadata = { samplingDragKind: 'capsuleHeight' }
+    }
     meshes.push(cap)
   }
+
+  const radiusHandle = MeshBuilder.CreateSphere('sampling-capsule-radius-handle', {
+    diameter: Math.max(capsuleRadius * 0.36, 5),
+    segments: 16,
+  }, scene)
+  radiusHandle.position = new Vector3(capsuleRadius, capsuleRadius, 0)
+  radiusHandle.material = handleMaterial
+  radiusHandle.isPickable = true
+  radiusHandle.metadata = { samplingDragKind: 'capsuleRadius' }
+  meshes.push(radiusHandle)
 
   const facingDirection = vectorFromSamplingArray(samplingQuery?.facing, new Vector3(0, 0, 1))
   const normalizedFacing = facingDirection.lengthSquared() > 0.0001 ? facingDirection.normalize() : new Vector3(0, 0, 1)
@@ -749,7 +860,8 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
   }, scene)
   faceHead.position = faceEnd
   faceHead.material = faceMaterial
-  faceHead.isPickable = false
+  faceHead.isPickable = true
+  faceHead.metadata = { samplingDragKind: 'facing' }
   meshes.push(faceHead)
 
   const trajectoryPoints = samplingQuery?.trajectory.length

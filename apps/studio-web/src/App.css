@@ -1026,6 +1026,60 @@
   background: var(--surface-2);
 }
 
+.sampling-match-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sampling-match-section h3 {
+  margin: 0;
+  color: var(--text-0);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sampling-match-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sampling-match-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 44px 52px;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.sampling-match-row strong,
+.sampling-match-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sampling-match-row span:first-child {
+  color: #8bd8a6;
+  font-weight: 700;
+}
+
+.sampling-match-row span:last-child {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .mini-action {
   height: 28px;
   padding: 0 8px;

@@ -132,6 +132,7 @@ function App() {
   const [clipContextMenu, setClipContextMenu] = useState<ClipContextMenu | null>(null)
   const [characterContextMenu, setCharacterContextMenu] = useState<CharacterContextMenu | null>(null)
   const [samplingContextMenu, setSamplingContextMenu] = useState<SamplingContextMenu | null>(null)
+  const [samplingDrafts, setSamplingDrafts] = useState<Record<string, SamplingQueryResponse>>({})
   const [lastBuildReport, setLastBuildReport] = useState<BuildReportResponse | null>(null)
   const [lastRuntimeDraft, setLastRuntimeDraft] = useState<RuntimeBuildDraftResponse | null>(null)
   const [textViewer, setTextViewer] = useState<TextViewer | null>(null)
@@ -164,7 +165,8 @@ function App() {
     () => selectedCharacter?.samplings.find((sampling) => selection?.type === 'sampling' && sampling.id === selection.samplingId) ?? null,
     [selectedCharacter, selection],
   )
-  const visibleSampling = selectedSampling ?? selectedCharacter?.samplings[0] ?? null
+  const savedVisibleSampling = selectedSampling ?? selectedCharacter?.samplings[0] ?? null
+  const visibleSampling = savedVisibleSampling ? samplingDrafts[savedVisibleSampling.id] ?? savedVisibleSampling : null
   const isSamplingPreviewActive = Boolean(selectedCharacter && !selectedClip && characterInspectorTab === 'sampling')
 
   useEffect(() => {
@@ -635,6 +637,11 @@ function App() {
         : currentWorkspace)
       const updatedSampling = updatedCharacter.samplings.find((item) => item.id === samplingId)
       if (updatedSampling) {
+        setSamplingDrafts((current) => {
+          const next = { ...current }
+          delete next[samplingId]
+          return next
+        })
         selectSampling(updatedCharacter.id, updatedSampling.id)
         appendLog(`Saved sampling ${updatedSampling.name}`)
       }
@@ -661,6 +668,11 @@ function App() {
 
     setIsBusy(true)
     setSamplingContextMenu(null)
+    setSamplingDrafts((current) => {
+      const next = { ...current }
+      delete next[samplingId]
+      return next
+    })
     appendLog(`Deleting sampling ${sampling.name}`)
     try {
       const updatedCharacter = await deleteSamplingQuery(characterId, samplingId)
@@ -683,6 +695,13 @@ function App() {
     } finally {
       setIsBusy(false)
     }
+  }
+
+  function handleSamplingDraftChange(query: SamplingQueryResponse) {
+    setSamplingDrafts((current) => ({
+      ...current,
+      [query.id]: query,
+    }))
   }
 
   async function handleUpdateClipSettings(
@@ -1100,13 +1119,7 @@ function App() {
           label={selectedClip ? `${selectedCharacter?.name ?? 'Character'} / ${selectedClip.name}` : selectedCharacter?.name ?? 'Empty scene'}
           onClipMotionModeChange={setClipMotionMode}
           onAnimationStateChange={setAnimationPreviewState}
-          onSamplingQueryChange={(query) => selectedCharacter && handleUpdateSampling(selectedCharacter.id, query.id, {
-            name: query.name,
-            capsule: query.capsule,
-            facing: query.facing,
-            velocity: query.velocity,
-            trajectory: query.trajectory,
-          })}
+          onSamplingQueryChange={handleSamplingDraftChange}
         />
       </section>
 
@@ -1134,7 +1147,8 @@ function App() {
             isBusy={isBusy}
             lastBuildReport={lastBuildReport?.characterId === selectedCharacter.id ? lastBuildReport : null}
             lastRuntimeDraft={lastRuntimeDraft?.characterId === selectedCharacter.id ? lastRuntimeDraft : null}
-            selectedSampling={visibleSampling}
+            selectedSampling={savedVisibleSampling}
+            selectedSamplingDraft={visibleSampling}
             runtimeSampleFrameStep={selectedCharacter.runtimeBuildSettings.sampleFrameStep}
             runtimeScaleMode={selectedCharacter.runtimeBuildSettings.scaleMode}
             activeTab={characterInspectorTab}
@@ -1149,6 +1163,7 @@ function App() {
             onCopyRuntimeBuildFolder={() => handleCopyRuntimeBuildFolder(selectedCharacter)}
             onExportRuntimeBuild={() => handleExportRuntimeBuild(selectedCharacter)}
             onActiveTabChange={setCharacterInspectorTab}
+            onSamplingDraftChange={handleSamplingDraftChange}
             onUpdateSampling={(samplingId, update) => handleUpdateSampling(selectedCharacter.id, samplingId, update)}
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
@@ -2587,6 +2602,82 @@ function vectorToYawDegrees(values: number[]) {
   return Number.isFinite(degrees) ? degrees : 0
 }
 
+function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: RuntimeDatabaseDraftResponse) {
+  const clipLookup = new Map(database.clips.map((clip) => [runtimeClipKey(clip.clipId, clip.isMirrored), clip]))
+  const queryFeatures = buildSamplingQueryFeatureValues(query, database.scale.normalizationFactor)
+
+  return database.samples
+    .map((sample) => {
+      let score = 0
+      let matchedFeatureCount = 0
+
+      for (const [name, queryValue] of Object.entries(queryFeatures)) {
+        const sampleValue = sample.features[name]
+        if (sampleValue === null || sampleValue === undefined || !Number.isFinite(sampleValue)) {
+          continue
+        }
+
+        const delta = sampleValue - queryValue
+        score += delta * delta
+        matchedFeatureCount += 1
+      }
+
+      const clip = clipLookup.get(runtimeClipKey(sample.clipId, sample.isMirrored))
+      return {
+        clipId: sample.clipId,
+        clipName: clip?.clipName ?? sample.clipId,
+        isMirrored: sample.isMirrored,
+        frame: sample.frame,
+        score,
+        matchedFeatureCount,
+      }
+    })
+    .filter((match) => match.matchedFeatureCount > 0)
+    .sort((left, right) => left.score - right.score)
+    .slice(0, 5)
+}
+
+function buildSamplingQueryFeatureValues(query: SamplingQueryResponse, normalizationFactor: number) {
+  const facing = normalizeVector2(query.facing[0] ?? 0, query.facing[2] ?? 1)
+  const velocityX = query.velocity[0] ?? 0
+  const velocityZ = query.velocity[2] ?? 0
+  const values: Record<string, number> = {
+    hips_velocity: Number((Math.hypot(velocityX, velocityZ) * normalizationFactor).toFixed(4)),
+  }
+
+  for (const offset of [20, 40, 60]) {
+    const point = nearestTrajectoryPoint(query.trajectory, offset)
+    if (!point) {
+      continue
+    }
+
+    const x = point.position[0] ?? 0
+    const z = point.position[2] ?? 0
+    const projectedDistance = (x * facing.x + z * facing.z) * normalizationFactor
+    const pointDirection = normalizeVector2(point.direction[0] ?? query.facing[0] ?? 0, point.direction[2] ?? query.facing[2] ?? 1)
+    const facingAlignment = pointDirection.x * facing.x + pointDirection.z * facing.z
+    values[`trajectory_position_${offset}`] = Number(projectedDistance.toFixed(4))
+    values[`trajectory_direction_${offset}`] = Number(facingAlignment.toFixed(4))
+  }
+
+  return values
+}
+
+function normalizeVector2(x: number, z: number) {
+  const length = Math.hypot(x, z)
+  return length > 0.0001 ? { x: x / length, z: z / length } : { x: 0, z: 1 }
+}
+
+function nearestTrajectoryPoint(points: SamplingQueryResponse['trajectory'], frameOffset: number) {
+  return points.reduce<SamplingQueryResponse['trajectory'][number] | null>((best, point) => {
+    if (!best) {
+      return point
+    }
+
+    return Math.abs(point.frameOffset - frameOffset) < Math.abs(best.frameOffset - frameOffset) ? point : best
+  }, null)
+}
+
 function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
   const contract = {
     characterName: draft.characterName,
@@ -2890,6 +2981,7 @@ function CharacterInspector({
   lastBuildReport,
   lastRuntimeDraft,
   selectedSampling,
+  selectedSamplingDraft,
   runtimeSampleFrameStep,
   runtimeScaleMode,
   activeTab,
@@ -2902,6 +2994,7 @@ function CharacterInspector({
   onCopyRuntimeBuildFolder,
   onExportRuntimeBuild,
   onActiveTabChange,
+  onSamplingDraftChange,
   onUpdateSampling,
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
@@ -2914,6 +3007,7 @@ function CharacterInspector({
   lastBuildReport: BuildReportResponse | null
   lastRuntimeDraft: RuntimeBuildDraftResponse | null
   selectedSampling: SamplingQueryResponse | null
+  selectedSamplingDraft: SamplingQueryResponse | null
   runtimeSampleFrameStep: number
   runtimeScaleMode: RuntimeScaleMode
   activeTab: CharacterInspectorTab
@@ -2926,6 +3020,7 @@ function CharacterInspector({
   onCopyRuntimeBuildFolder: () => void
   onExportRuntimeBuild: () => void
   onActiveTabChange: (tab: CharacterInspectorTab) => void
+  onSamplingDraftChange: (query: SamplingQueryResponse) => void
   onUpdateSampling: (samplingId: string, update: SamplingQueryUpdateRequest) => void
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
@@ -3032,8 +3127,10 @@ function CharacterInspector({
             key={`${selectedSampling?.id ?? character.samplings[0]?.id ?? 'sampling-empty'}-${selectedSampling?.name ?? character.samplings[0]?.name ?? ''}`}
             character={character}
             sampling={selectedSampling ?? character.samplings[0] ?? null}
+            draft={selectedSamplingDraft}
             runtimeDraft={lastRuntimeDraft}
             isBusy={isBusy}
+            onDraftChange={onSamplingDraftChange}
             onUpdateSampling={onUpdateSampling}
           />
         )}
@@ -3071,74 +3168,81 @@ function CharacterInspector({
 function SamplingInspector({
   character,
   sampling,
+  draft,
   runtimeDraft,
   isBusy,
+  onDraftChange,
   onUpdateSampling,
 }: {
   character: CharacterResponse
   sampling: SamplingQueryResponse | null
+  draft: SamplingQueryResponse | null
   runtimeDraft: RuntimeBuildDraftResponse | null
   isBusy: boolean
+  onDraftChange: (query: SamplingQueryResponse) => void
   onUpdateSampling: (samplingId: string, update: SamplingQueryUpdateRequest) => void
 }) {
-  const [draft, setDraft] = useState<SamplingQueryResponse | null>(sampling)
   const runtimeScale = runtimeDraft
     ? `${formatRuntimeScaleMode(runtimeDraft.features.scale.mode)} x${formatNumber(runtimeDraft.features.scale.normalizationFactor)}`
     : 'Not generated'
   const hasChanges = Boolean(sampling && draft && JSON.stringify(sampling) !== JSON.stringify(draft))
   const facingAngle = draft ? vectorToYawDegrees(draft.facing) : 0
+  const matcherPreview = useMemo(
+    () => draft && runtimeDraft ? buildSamplingMatcherPreview(draft, runtimeDraft.database) : [],
+    [draft, runtimeDraft],
+  )
+
+  function updateDraft(updater: (current: SamplingQueryResponse) => SamplingQueryResponse) {
+    if (!draft) {
+      return
+    }
+
+    onDraftChange(updater(draft))
+  }
 
   function updateCapsule(field: keyof SamplingQueryResponse['capsule'], value: number) {
-    setDraft((current) => current
-      ? {
-          ...current,
-          capsule: {
-            ...current.capsule,
-            [field]: value,
-          },
-        }
-      : current)
+    updateDraft((current) => ({
+      ...current,
+      capsule: {
+        ...current.capsule,
+        [field]: value,
+      },
+    }))
   }
 
   function updateVector(field: 'facing' | 'velocity', index: number, value: number) {
-    setDraft((current) => current
-      ? {
-          ...current,
-          [field]: updateVectorValue(current[field], index, value),
-        }
-      : current)
+    updateDraft((current) => ({
+      ...current,
+      [field]: updateVectorValue(current[field], index, value),
+    }))
   }
 
   function updateFacingAngle(degrees: number) {
     const radians = degrees * Math.PI / 180
-    setDraft((current) => current
-      ? {
-          ...current,
-          facing: [Number(Math.sin(radians).toFixed(3)), 0, Number(Math.cos(radians).toFixed(3))],
-        }
-      : current)
+    updateDraft((current) => ({
+      ...current,
+      facing: [Number(Math.sin(radians).toFixed(3)), 0, Number(Math.cos(radians).toFixed(3))],
+    }))
   }
 
   function updateTrajectory(index: number, field: 'frameOffset' | 'positionX' | 'positionZ', value: number) {
-    setDraft((current) => current
-      ? {
-          ...current,
-          trajectory: current.trajectory.map((point, pointIndex) => {
-            if (pointIndex !== index) {
-              return point
-            }
-
-            if (field === 'frameOffset') {
-              return { ...point, frameOffset: Math.max(Math.round(value), 1) }
-            }
-
-            return {
-              ...point,
-              position: updateVectorValue(point.position, field === 'positionX' ? 0 : 2, value),
-            }
-          }),
+    updateDraft((current) => ({
+      ...current,
+      trajectory: current.trajectory.map((point, pointIndex) => {
+        if (pointIndex !== index) {
+          return point
         }
-      : current)
+
+        if (field === 'frameOffset') {
+          return { ...point, frameOffset: Math.max(Math.round(value), 1) }
+        }
+
+        return {
+          ...point,
+          position: updateVectorValue(point.position, field === 'positionX' ? 0 : 2, value),
+        }
+      }),
+    }))
   }
 
   function saveSampling() {
@@ -3156,11 +3260,7 @@ function SamplingInspector({
   }
 
   function addTrajectoryPoint() {
-    setDraft((current) => {
-      if (!current) {
-        return current
-      }
-
+    updateDraft((current) => {
       const lastPoint = current.trajectory.at(-1)
       const nextFrame = (lastPoint?.frameOffset ?? 0) + 20
       const nextPosition = lastPoint
@@ -3186,12 +3286,10 @@ function SamplingInspector({
   }
 
   function deleteTrajectoryPoint(index: number) {
-    setDraft((current) => current
-      ? {
-          ...current,
-          trajectory: current.trajectory.filter((_, pointIndex) => pointIndex !== index),
-        }
-      : current)
+    updateDraft((current) => ({
+      ...current,
+      trajectory: current.trajectory.filter((_, pointIndex) => pointIndex !== index),
+    }))
   }
 
   return (
@@ -3270,10 +3368,31 @@ function SamplingInspector({
           </button>
         </>
       ) : null}
-      <button type="button" className="inspector-action" disabled title="Matcher is the next slice">
-        <FileText size={14} aria-hidden="true" />
-        Generate Sample
-      </button>
+      <section className="sampling-match-section">
+        <h3>Matcher Preview</h3>
+        {runtimeDraft ? (
+          matcherPreview.length ? (
+            <div className="sampling-match-list">
+              {matcherPreview.map((match, index) => (
+                <div
+                  key={`${match.clipId}-${match.isMirrored ? 'mirror' : 'source'}-${match.frame}`}
+                  className="sampling-match-row"
+                  title={`${match.matchedFeatureCount} feature channels compared`}
+                >
+                  <span>{index + 1}</span>
+                  <strong>{`${match.clipName}${match.isMirrored ? ' Mirror' : ''}`}</strong>
+                  <span>{`F${match.frame + 1}`}</span>
+                  <span>{formatNumber(match.score)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">No database samples to match</p>
+          )
+        ) : (
+          <p className="muted">Build Runtime first to preview top matches from the database draft</p>
+        )}
+      </section>
       <button type="button" className="inspector-action" disabled title="Export comes after generated sample recipes">
         <Archive size={14} aria-hidden="true" />
         Export Generated Clip
