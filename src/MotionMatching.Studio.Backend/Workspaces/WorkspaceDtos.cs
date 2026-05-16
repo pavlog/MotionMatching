@@ -26,6 +26,7 @@ public sealed record CharacterResponse(
 public sealed record SamplingQueryResponse(
     string Id,
     string Name,
+    string? RoleFilter,
     SamplingCapsuleResponse Capsule,
     IReadOnlyList<double> Facing,
     IReadOnlyList<double> Velocity,
@@ -340,6 +341,7 @@ public sealed record SamplingQueryCreateRequest(
 
 public sealed record SamplingQueryUpdateRequest(
     string? Name,
+    string? RoleFilter,
     SamplingCapsuleUpdateRequest? Capsule,
     IReadOnlyList<double>? Facing,
     IReadOnlyList<double>? Velocity,

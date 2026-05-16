@@ -28,6 +28,8 @@ public sealed record SamplingQueryManifest
 
     public required string Name { get; init; }
 
+    public string? RoleFilter { get; init; }
+
     public SamplingCapsuleManifest Capsule { get; init; } = new();
 
     public double[] Facing { get; init; } = [0, 0, 1];

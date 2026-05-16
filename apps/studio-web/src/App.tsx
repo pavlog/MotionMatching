@@ -2608,6 +2608,11 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
 
   return database.samples
     .map((sample) => {
+      const clip = clipLookup.get(runtimeClipKey(sample.clipId, sample.isMirrored))
+      if (query.roleFilter && clip?.clipRole !== query.roleFilter) {
+        return null
+      }
+
       let score = 0
       let matchedFeatureCount = 0
 
@@ -2622,7 +2627,6 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
         matchedFeatureCount += 1
       }
 
-      const clip = clipLookup.get(runtimeClipKey(sample.clipId, sample.isMirrored))
       return {
         clipId: sample.clipId,
         clipName: clip?.clipName ?? sample.clipId,
@@ -2632,6 +2636,7 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
         matchedFeatureCount,
       }
     })
+    .filter((match) => match !== null)
     .filter((match) => match.matchedFeatureCount > 0)
     .sort((left, right) => left.score - right.score)
     .slice(0, 5)
@@ -3200,6 +3205,13 @@ function SamplingInspector({
     onDraftChange(updater(draft))
   }
 
+  function updateRoleFilter(roleFilter: string | null) {
+    updateDraft((current) => ({
+      ...current,
+      roleFilter,
+    }))
+  }
+
   function updateCapsule(field: keyof SamplingQueryResponse['capsule'], value: number) {
     updateDraft((current) => ({
       ...current,
@@ -3252,6 +3264,7 @@ function SamplingInspector({
 
     onUpdateSampling(draft.id, {
       name: draft.name,
+      roleFilter: draft.roleFilter ?? '',
       capsule: draft.capsule,
       facing: draft.facing,
       velocity: draft.velocity,
@@ -3303,6 +3316,8 @@ function SamplingInspector({
         <dd>{draft ? `Height ${formatNumber(draft.capsule.height)}, radius ${formatNumber(draft.capsule.radius)}` : '--'}</dd>
         <dt>Facing</dt>
         <dd>{draft ? formatVector(draft.facing) : '--'}</dd>
+        <dt>Role</dt>
+        <dd>{draft?.roleFilter ?? 'Any role'}</dd>
         <dt>Trajectory</dt>
         <dd>{draft ? draft.trajectory.map((point) => point.frameOffset).join(' / ') : '--'}</dd>
         <dt>Scale</dt>
@@ -3311,6 +3326,17 @@ function SamplingInspector({
       {draft ? (
         <>
           <div className="sampling-edit-grid">
+            <label className="setting-field">
+              Target role
+              <select value={draft.roleFilter ?? ''} onChange={(event) => updateRoleFilter(event.target.value || null)}>
+                <option value="">Any role</option>
+                {clipRoles.map((role) => (
+                  <option key={role.value} value={role.value}>
+                    {role.value} - {role.description}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="setting-field">
               Capsule height
               <input type="number" min={1} value={draft.capsule.height} onChange={(event) => updateCapsule('height', Number(event.target.value) || 1)} />

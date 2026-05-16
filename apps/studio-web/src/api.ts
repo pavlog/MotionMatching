@@ -28,6 +28,7 @@ export interface CharacterResponse {
 export interface SamplingQueryResponse {
   id: string
   name: string
+  roleFilter: string | null
   capsule: SamplingCapsuleResponse
   facing: number[]
   velocity: number[]
@@ -47,6 +48,7 @@ export interface SamplingTrajectoryPointResponse {
 
 export interface SamplingQueryUpdateRequest {
   name?: string
+  roleFilter?: string | null
   capsule?: Partial<SamplingCapsuleResponse>
   facing?: number[]
   velocity?: number[]

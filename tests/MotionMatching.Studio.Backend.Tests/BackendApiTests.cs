@@ -107,6 +107,7 @@ public sealed class BackendApiTests : IAsyncLifetime
 
         var editResponse = await client.PatchAsJsonAsync($"/api/v1/workspaces/browser/characters/{characterId}/samplings/{samplingId}", new
         {
+            roleFilter = "run_loop",
             capsule = new { height = 88, radius = 18 },
             facing = new[] { 1.0, 0.0, 0.0 },
             velocity = new[] { 2.0, 0.0, 3.0 },
@@ -118,6 +119,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         });
         var editJson = await editResponse.Content.ReadAsStringAsync();
         editResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"roleFilter\":\"run_loop\"", editJson);
         Assert.Contains("\"height\":88", editJson);
         Assert.Contains("\"radius\":18", editJson);
         Assert.Contains("\"frameOffset\":40", editJson);

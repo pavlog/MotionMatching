@@ -252,6 +252,7 @@ public sealed class BrowserWorkspaceService
         nextSamplings[index] = currentSampling with
         {
             Name = request.Name is null ? currentSampling.Name : NormalizeSamplingName(request.Name, manifest.Samplings, samplingId),
+            RoleFilter = request.RoleFilter is null ? currentSampling.RoleFilter : NormalizeClipRole(request.RoleFilter),
             Capsule = NormalizeSamplingCapsule(request.Capsule, currentSampling.Capsule),
             Facing = NormalizeVector3(request.Facing, currentSampling.Facing),
             Velocity = NormalizeVector3(request.Velocity, currentSampling.Velocity),
@@ -787,6 +788,7 @@ public sealed class BrowserWorkspaceService
             .Select(sampling => new SamplingQueryResponse(
                 sampling.Id.Value,
                 sampling.Name,
+                NormalizeClipRole(sampling.RoleFilter),
                 new SamplingCapsuleResponse(sampling.Capsule.Height, sampling.Capsule.Radius),
                 sampling.Facing,
                 sampling.Velocity,
