@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -560,6 +561,66 @@ public sealed class BrowserWorkspaceService
         }
 
         return ManifestJson.Deserialize<RuntimeBuildDraftResponse>(await File.ReadAllTextAsync(fullDraftPath, cancellationToken));
+    }
+
+    public async Task<RuntimeBuildExportResponse> ExportRuntimeBuildZipAsync(
+        string characterId,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await EnsureWorkspaceManifestAsync(cancellationToken);
+        var reference = workspace.Characters.FirstOrDefault(character => character.Id.Value == characterId)
+            ?? throw new KeyNotFoundException("Character was not found.");
+
+        var draftPath = GetRuntimeBuildDraftPath(reference);
+        var fullDraftPath = Path.Combine(GetWorkspaceRoot(), draftPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(fullDraftPath))
+        {
+            throw new FileNotFoundException("Runtime build draft was not found.", fullDraftPath);
+        }
+
+        var buildFolderPath = GetRuntimeBuildFolderPath(reference);
+        var fullBuildFolderPath = Path.Combine(GetWorkspaceRoot(), buildFolderPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!Directory.Exists(fullBuildFolderPath))
+        {
+            throw new DirectoryNotFoundException($"Runtime build folder was not found: {buildFolderPath}");
+        }
+
+        var zipPath = GetRuntimeBuildExportZipPath(reference);
+        var fullZipPath = Path.Combine(GetWorkspaceRoot(), zipPath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(fullZipPath) ?? throw new InvalidOperationException($"Path has no directory: {fullZipPath}"));
+        if (File.Exists(fullZipPath))
+        {
+            File.Delete(fullZipPath);
+        }
+
+        var includedPaths = new List<string>();
+        using (var archive = ZipFile.Open(fullZipPath, ZipArchiveMode.Create))
+        {
+            foreach (var filePath in Directory.EnumerateFiles(fullBuildFolderPath, "*", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.Equals(Path.GetFullPath(filePath), Path.GetFullPath(fullZipPath), StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (string.Equals(Path.GetExtension(filePath), ".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var relativePath = Path.GetRelativePath(fullBuildFolderPath, filePath).Replace('\\', '/');
+                archive.CreateEntryFromFile(filePath, relativePath, CompressionLevel.Optimal);
+                includedPaths.Add(ToPortablePath(buildFolderPath, relativePath));
+            }
+        }
+
+        return new RuntimeBuildExportResponse(
+            reference.Id.Value,
+            reference.Name,
+            buildFolderPath,
+            zipPath,
+            includedPaths);
     }
 
     public async Task<CharacterResponse> UpdateRuntimeBuildSettingsAsync(
@@ -2358,9 +2419,20 @@ public sealed class BrowserWorkspaceService
         return ToPortablePath("Builds", GetCharacterFolderName(reference), "build-report.json");
     }
 
+    private static string GetRuntimeBuildFolderPath(CharacterReference reference)
+    {
+        return ToPortablePath("Builds", GetCharacterFolderName(reference));
+    }
+
     private static string GetRuntimeBuildDraftPath(CharacterReference reference)
     {
         return ToPortablePath("Builds", GetCharacterFolderName(reference), "runtime-build-draft.json");
+    }
+
+    private static string GetRuntimeBuildExportZipPath(CharacterReference reference)
+    {
+        var characterFolderName = GetCharacterFolderName(reference);
+        return ToPortablePath("Builds", characterFolderName, $"{characterFolderName}-runtime-build.zip");
     }
 
     private static string GetRuntimeSkeletonDraftPath(CharacterReference reference)

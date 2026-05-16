@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Box as BoxIcon, CheckCircle2, CirclePlus, Copy, FileText, Film, ListTree, Loader2, Pause, Play, RefreshCw, StepBack, StepForward, TerminalSquare, Trash2, TriangleAlert, X } from 'lucide-react'
+import { AlertCircle, Archive, Box as BoxIcon, CheckCircle2, CirclePlus, Copy, FileText, Film, ListTree, Loader2, Pause, Play, RefreshCw, StepBack, StepForward, TerminalSquare, Trash2, TriangleAlert, X } from 'lucide-react'
 import {
   type ClipResponse,
   type BuildReportResponse,
@@ -12,6 +12,7 @@ import {
   createBrowserWorkspace,
   deleteCharacter,
   deleteClip,
+  exportRuntimeBuild,
   generateBuildReport,
   generateRuntimeBuildDraft,
   getBuildReport,
@@ -729,6 +730,19 @@ function App() {
     }
   }
 
+  async function handleExportRuntimeBuild(character: CharacterResponse) {
+    setIsBusy(true)
+    appendLog(`Exporting runtime build ZIP for ${character.name}`)
+    try {
+      const result = await exportRuntimeBuild(character.id)
+      appendLog(`Runtime build ZIP exported: ${result.zipPath} (${result.includedPaths.length} files)`)
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Runtime build export failed', 'error')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   function openBuildReportViewer(report: BuildReportResponse, currentReadiness: CharacterResponse['buildReadiness']) {
     setTextViewer({
       heading: 'Build Report',
@@ -910,6 +924,7 @@ function App() {
             onViewRuntimeDraft={() => handleViewRuntimeBuildDraft(selectedCharacter)}
             onViewRuntimeDatabaseDraft={() => handleViewRuntimeDatabaseDraft(selectedCharacter)}
             onCopyRuntimeBuildFolder={() => handleCopyRuntimeBuildFolder(selectedCharacter)}
+            onExportRuntimeBuild={() => handleExportRuntimeBuild(selectedCharacter)}
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
@@ -1451,6 +1466,27 @@ function DatabaseDraftView({
   path: string
 }) {
   const [jsonCopyState, setJsonCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [queryCopyState, setQueryCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [selectedClipKey, setSelectedClipKey] = useState('all')
+  const [frameFilter, setFrameFilter] = useState('')
+  const [selectedSampleKey, setSelectedSampleKey] = useState<string | null>(null)
+  const clipLookup = useMemo(() => new Map(database.clips.map((clip) => [runtimeClipKey(clip.clipId, clip.isMirrored), clip])), [database.clips])
+  const rawFrameFilter = frameFilter.trim() === '' ? null : Number(frameFilter)
+  const parsedFrameFilter = rawFrameFilter === null || !Number.isFinite(rawFrameFilter) ? null : rawFrameFilter
+  const filteredSamples = useMemo(() => database.samples.filter((sample) => {
+    if (selectedClipKey !== 'all' && runtimeClipKey(sample.clipId, sample.isMirrored) !== selectedClipKey) {
+      return false
+    }
+
+    return parsedFrameFilter === null || sample.frame === Math.max(Math.round(parsedFrameFilter) - 1, 0)
+  }), [database.samples, parsedFrameFilter, selectedClipKey])
+  const visibleSamples = filteredSamples.slice(0, 80)
+  const selectedSample = filteredSamples.find((sample) => runtimeDatabaseSampleKey(sample) === selectedSampleKey)
+    ?? filteredSamples[0]
+    ?? database.samples[0]
+    ?? null
+  const selectedSampleClip = selectedSample ? clipLookup.get(runtimeClipKey(selectedSample.clipId, selectedSample.isMirrored)) : null
+  const selectedFeatureEntries = selectedSample ? Object.entries(selectedSample.features) : []
 
   async function copyDatabaseJson() {
     try {
@@ -1458,6 +1494,32 @@ function DatabaseDraftView({
       setJsonCopyState('copied')
     } catch {
       setJsonCopyState('failed')
+    }
+  }
+
+  async function copyQuerySample() {
+    if (!selectedSample) {
+      return
+    }
+
+    const payload = {
+      schema: database.schema,
+      scale: database.scale,
+      sample: {
+        clipId: selectedSample.clipId,
+        clipName: selectedSampleClip?.clipName ?? selectedSample.clipId,
+        isMirrored: selectedSample.isMirrored,
+        frame: selectedSample.frame,
+        seconds: selectedSample.seconds,
+        features: selectedSample.features,
+      },
+    }
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+      setQueryCopyState('copied')
+    } catch {
+      setQueryCopyState('failed')
     }
   }
 
@@ -1515,16 +1577,87 @@ function DatabaseDraftView({
         </div>
       </section>
       <section className="report-section">
-        <h3>Samples Preview</h3>
-        <div className="report-table">
-          {database.samplePreviews.length ? database.samplePreviews.slice(0, 24).map((sample, index) => (
-            <div key={`${sample.clipId}-${sample.isMirrored ? 'mirror' : 'source'}-${sample.frame}-${index}`} className="report-row">
-              <span>{`${sample.clipName}${sample.isMirrored ? ' Mirror' : ''} F${sample.frame + 1}`}</span>
-              <span>{`${formatNumber(sample.seconds)}s`}</span>
-              <span>{formatFeaturePreviewValues(sample.features)}</span>
-            </div>
-          )) : <p>No database samples</p>}
+        <h3>Samples</h3>
+        <div className="database-sample-controls">
+          <label className="setting-field">
+            Clip
+            <select value={selectedClipKey} onChange={(event) => setSelectedClipKey(event.target.value)}>
+              <option value="all">All clips</option>
+              {database.clips.map((clip) => (
+                <option key={runtimeClipKey(clip.clipId, clip.isMirrored)} value={runtimeClipKey(clip.clipId, clip.isMirrored)}>
+                  {`${clip.clipName}${clip.isMirrored ? ' Mirror' : ''}`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="setting-field">
+            Frame
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={frameFilter}
+              onChange={(event) => setFrameFilter(event.target.value)}
+              placeholder="Any"
+            />
+          </label>
+          <span className="database-sample-count">{`${filteredSamples.length}/${database.samples.length} samples`}</span>
         </div>
+        <div className="report-table">
+          {visibleSamples.length ? visibleSamples.map((sample) => {
+            const clipKey = runtimeClipKey(sample.clipId, sample.isMirrored)
+            const sampleKey = runtimeDatabaseSampleKey(sample)
+            const clip = clipLookup.get(clipKey)
+
+            return (
+              <button
+                key={sampleKey}
+                type="button"
+                className={`report-row report-row-button ${selectedSample && sampleKey === runtimeDatabaseSampleKey(selectedSample) ? 'active' : ''}`}
+                onClick={() => setSelectedSampleKey(sampleKey)}
+              >
+                <span>{`${clip?.clipName ?? sample.clipId}${sample.isMirrored ? ' Mirror' : ''} F${sample.frame + 1}`}</span>
+                <span>{`${formatNumber(sample.seconds)}s`}</span>
+                <span>{formatFeaturePreviewValues(sample.features)}</span>
+              </button>
+            )
+          }) : <p>No database samples</p>}
+          {filteredSamples.length > visibleSamples.length ? (
+            <div className="report-row single">
+              <span>{`Showing first ${visibleSamples.length} filtered samples. Narrow the frame or clip filter for more.`}</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
+      <section className="report-section">
+        <h3>Runtime Query Preview</h3>
+        {selectedSample ? (
+          <>
+            <dl className="report-summary-grid">
+              <dt>Clip</dt>
+              <dd>{`${selectedSampleClip?.clipName ?? selectedSample.clipId}${selectedSample.isMirrored ? ' Mirror' : ''}`}</dd>
+              <dt>Frame</dt>
+              <dd>{selectedSample.frame + 1}</dd>
+              <dt>Time</dt>
+              <dd>{`${formatNumber(selectedSample.seconds)}s`}</dd>
+              <dt>Scale</dt>
+              <dd>{`${formatRuntimeScaleMode(database.scale.mode)} x${formatNumber(database.scale.normalizationFactor)}`}</dd>
+            </dl>
+            <button type="button" className="inspector-action" onClick={copyQuerySample}>
+              <Copy size={14} aria-hidden="true" />
+              {queryCopyState === 'copied' ? 'Copied Query Sample' : queryCopyState === 'failed' ? 'Copy Failed' : 'Copy Query Sample'}
+            </button>
+            <div className="report-table feature-vector-table">
+              {selectedFeatureEntries.map(([name, value]) => (
+                <div key={name} className="report-row">
+                  <span>{name}</span>
+                  <span>{value === null ? 'null' : formatNumber(value)}</span>
+                  <span>{value === null ? 'missing' : 'ready'}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : <p>No sample selected</p>}
       </section>
       <section className="report-section">
         <h3>Findings</h3>
@@ -2162,6 +2295,14 @@ function formatFeaturePreviewValues(values: Record<string, number | null>) {
     : '--'
 }
 
+function runtimeClipKey(clipId: string, isMirrored: boolean) {
+  return `${clipId}:${isMirrored ? 'mirror' : 'source'}`
+}
+
+function runtimeDatabaseSampleKey(sample: { clipId: string; isMirrored: boolean; frame: number }) {
+  return `${runtimeClipKey(sample.clipId, sample.isMirrored)}:${sample.frame}`
+}
+
 function formatPoseBonePreview(bones: Array<{ boneName: string; translation: number[]; rotation: number[] }>) {
   const bone = bones[0]
   if (!bone) {
@@ -2486,6 +2627,7 @@ function CharacterInspector({
   onViewRuntimeDraft,
   onViewRuntimeDatabaseDraft,
   onCopyRuntimeBuildFolder,
+  onExportRuntimeBuild,
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
   onSelectClip,
@@ -2505,6 +2647,7 @@ function CharacterInspector({
   onViewRuntimeDraft: () => void
   onViewRuntimeDatabaseDraft: () => void
   onCopyRuntimeBuildFolder: () => void
+  onExportRuntimeBuild: () => void
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
   onSelectClip: (clipId: string) => void
@@ -2615,6 +2758,16 @@ function CharacterInspector({
         >
           <Copy size={14} aria-hidden="true" />
           Copy Build Folder
+        </button>
+        <button
+          type="button"
+          className={`inspector-action report-status-${character.runtimeBuildDraftStatus}`}
+          disabled={isBusy || !hasRuntimeDraft}
+          onClick={onExportRuntimeBuild}
+          title="Export runtime build folder as ZIP"
+        >
+          <Archive size={14} aria-hidden="true" />
+          Export ZIP
         </button>
       </section>
       <BuildReadinessPanel character={character} onSelectClip={onSelectClip} />

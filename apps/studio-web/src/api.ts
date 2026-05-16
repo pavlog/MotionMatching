@@ -182,6 +182,14 @@ export interface RuntimeBuildArtifactResponse {
   status: string
 }
 
+export interface RuntimeBuildExportResponse {
+  characterId: string
+  characterName: string
+  buildFolderPath: string
+  zipPath: string
+  includedPaths: string[]
+}
+
 export interface RuntimeSkeletonDraftResponse {
   status: 'ok' | 'warning' | 'error'
   rootBoneName: string | null
@@ -537,6 +545,22 @@ export async function getRuntimeBuildDraft(characterId: string): Promise<Runtime
 
   if (!response.ok) {
     throw new Error(`Runtime build draft load failed: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function exportRuntimeBuild(characterId: string): Promise<RuntimeBuildExportResponse> {
+  const response = await fetch(`${apiBase}/api/v1/workspaces/browser/characters/${characterId}/runtime-build-export`, {
+    method: 'POST',
+  })
+
+  if (response.status === 404) {
+    throw new Error('Runtime build draft was not found.')
+  }
+
+  if (!response.ok) {
+    throw new Error(`Runtime build export failed: ${response.status}`)
   }
 
   return response.json()

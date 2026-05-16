@@ -457,7 +457,8 @@ After clip reprocess/replacement:
 - Character inspector also shows the current effective runtime scale from the last loaded/generated runtime draft, for example `Source x0.01 x0.01` or `Character x1 x1`; if no draft is loaded, it shows `Not generated`.
 - Runtime build settings (`sampleFrameStep`, `scaleMode`) are stored in `character.json` under `runtimeBuildSettings` and updated through the character inspector, so they survive browser reloads. The inspector shows a small save state while those settings are written. The Runtime Build Preview includes `Copy Query Contract`, which copies a compact JSON contract for engine integration: scale mode/factor, feature layout, skeleton slots, and planned sample counts. Build Report and Runtime Build Preview also include `Copy Paths` buttons for the generated artifact paths. The character inspector has `View Database Draft`, which opens the `.mmdatabase` draft directly and can copy that database JSON.
 - `.mmdatabase` contains both `schemaVersion` and a lightweight `schema` block (`id`, numeric `version`, `format`, `units`) so engine-side import can validate the file before consuming samples.
-- Runtime Build Preview and Database Draft show a warning if feature/database samples exist but no pose values were sampled. The character inspector also has `Copy Build Folder`, which copies the portable build folder path such as `Builds/IyoMixamo`.
+- Runtime Build Preview and Database Draft show a warning if feature/database samples exist but no pose values were sampled. The character inspector also has `Copy Build Folder`, which copies the portable build folder path such as `Builds/IyoMixamo`, and `Export ZIP`, which writes `Builds/<CharacterName>/<CharacterName>-runtime-build.zip` from the generated build folder. The ZIP excludes prior ZIP files and stores portable relative entries only.
+- Database Draft includes a sample table with clip/frame filters and a Runtime Query Preview. Selecting a database sample shows the exact feature vector, scale metadata, source/mirrored clip identity, frame, and time, and can copy a compact query-sample JSON for engine-side integration checks.
 - Clip rows and inspectors show validation state using colors and icons for errors/warnings.
 - Left panel rows show aggregate validation badges.
 - Character rows show highest severity and counts across visual import, included clips, and build readiness.
@@ -787,7 +788,7 @@ Play Mode input direction:
 - UI build actions are per character.
 - Workspace-level Build All is not required in MVP.
 - CLI build is desirable later but not urgent for the MVP vertical slice.
-- Portable zip/export command is not required in MVP; workspaces are self-contained by design and can be zipped manually.
+- Portable build-folder ZIP export exists in MVP as a convenience command for the generated runtime draft artifacts; external Unity/database export remains a later command.
 - Build writes derived output inside workspace.
 - Build can optionally export/copy to a user-selected external target.
 - Database export can overwrite/update existing generated database files in the target folder.

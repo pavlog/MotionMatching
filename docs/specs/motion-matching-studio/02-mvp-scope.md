@@ -149,7 +149,7 @@ run and jump with the current character
 - `Generate Build Report` writes the current first build plan to `Builds/<CharacterName>/build-report.json`; this is a report artifact only, not the runtime database.
 - Saved build reports remain viewable after browser reload through the character inspector.
 - Saved build reports show `none/current/outdated` status based on a readiness fingerprint.
-- `Build Runtime` writes `Builds/<CharacterName>/runtime-build-draft.json` plus first JSON drafts for `Builds/<CharacterName>/<CharacterName>.mmskeleton`, `.mmpose`, `.mmfeatures`, and `.mmdatabase`. It records the feature preset, skeleton bones/slots, planned pose samples per source/mirrored build entry, sampled local pose bone values from clip preview GLB when available, planned feature channels/samples, a user-chosen sample frame step, rough feature value preview from root-motion/foot-contact diagnostics, trajectory offset estimates, explicit scale mode (`Auto`, `Source x0.01`, `Character x1`), and a combined database draft with clips, dense samples for every sampled frame, embedded pose samples, feature values, scale/schema metadata, and foot contact tracks so engine queries can be authored in the same units as the generated database. The database draft can be opened directly from the character inspector and copied as JSON. Missing pose values are called out in the runtime/database viewers, and the build folder path can be copied from the inspector. It exposes `none/current/outdated` runtime draft status in the character inspector, but does not claim Unity binary/database compatibility yet.
+- `Build Runtime` writes `Builds/<CharacterName>/runtime-build-draft.json` plus first JSON drafts for `Builds/<CharacterName>/<CharacterName>.mmskeleton`, `.mmpose`, `.mmfeatures`, and `.mmdatabase`. It records the feature preset, skeleton bones/slots, planned pose samples per source/mirrored build entry, sampled local pose bone values from clip preview GLB when available, planned feature channels/samples, a user-chosen sample frame step, rough feature value preview from root-motion/foot-contact diagnostics, trajectory offset estimates, explicit scale mode (`Auto`, `Source x0.01`, `Character x1`), and a combined database draft with clips, dense samples for every sampled frame, embedded pose samples, feature values, scale/schema metadata, and foot contact tracks so engine queries can be authored in the same units as the generated database. The database draft can be opened directly from the character inspector, filtered by clip/frame, inspected as a Runtime Query Preview, and copied as JSON. Missing pose values are called out in the runtime/database viewers, the build folder path can be copied from the inspector, and `Export ZIP` writes a portable build-folder archive. It exposes `none/current/outdated` runtime draft status in the character inspector, but does not claim Unity binary/database compatibility yet.
 - Character inspector shows the effective runtime scale from the last loaded/generated runtime draft near the runtime controls.
 - Runtime build settings persist per character in `character.json`, and the Runtime Build Preview can copy a compact engine query contract with scale and feature layout.
 - Build runs in background.
@@ -175,7 +175,7 @@ run and jump with the current character
 - Electron packaging.
 - CLI build command.
 - Workspace-level Build All.
-- Portable zip/export command.
+- External Unity/database export command.
 - Cloud/web hosted backend.
 - Unity descriptor generation.
 - Full manual feature editor.

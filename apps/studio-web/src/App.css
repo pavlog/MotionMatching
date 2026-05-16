@@ -827,6 +827,17 @@
   font-size: 12px;
 }
 
+.report-row-button {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+}
+
+.report-row-button.active {
+  border-color: rgba(94, 168, 255, 0.68);
+  background: rgba(94, 168, 255, 0.14);
+}
+
 .report-row.single {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -855,6 +866,22 @@
   max-height: 260px;
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+
+.database-sample-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 96px auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.database-sample-count {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.feature-vector-table {
+  margin-top: 8px;
 }
 
 .hidden-file-input {

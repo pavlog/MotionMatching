@@ -217,6 +217,30 @@ app.MapGet("/api/v1/workspaces/browser/characters/{characterId}/runtime-build-dr
     }
 });
 
+app.MapPost("/api/v1/workspaces/browser/characters/{characterId}/runtime-build-export", async (
+    string characterId,
+    BrowserWorkspaceService workspaceService,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var result = await workspaceService.ExportRuntimeBuildZipAsync(characterId, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "character_not_found", message = exception.Message });
+    }
+    catch (FileNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "runtime_build_draft_not_found", message = exception.Message });
+    }
+    catch (DirectoryNotFoundException exception)
+    {
+        return Results.NotFound(new { error = "runtime_build_folder_not_found", message = exception.Message });
+    }
+});
+
 app.MapPatch("/api/v1/workspaces/browser/characters/{characterId}/runtime-build-settings", async (
     string characterId,
     RuntimeBuildSettingsRequest request,

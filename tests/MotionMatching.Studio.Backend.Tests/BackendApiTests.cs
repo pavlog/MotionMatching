@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.IO.Compression;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -535,6 +536,20 @@ public sealed class BackendApiTests : IAsyncLifetime
         var loadedDraftJson = await loadedDraftResponse.Content.ReadAsStringAsync();
         loadedDraftResponse.EnsureSuccessStatusCode();
         Assert.Contains("\"draftPath\":\"Builds/IyoMixamo/runtime-build-draft.json\"", loadedDraftJson);
+
+        var exportResponse = await client.PostAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-export", content: null);
+        var exportJson = await exportResponse.Content.ReadAsStringAsync();
+        exportResponse.EnsureSuccessStatusCode();
+        Assert.Contains("\"buildFolderPath\":\"Builds/IyoMixamo\"", exportJson);
+        Assert.Contains("\"zipPath\":\"Builds/IyoMixamo/IyoMixamo-runtime-build.zip\"", exportJson);
+        Assert.Contains("\"Builds/IyoMixamo/IyoMixamo.mmdatabase\"", exportJson);
+
+        var zipPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "IyoMixamo-runtime-build.zip");
+        Assert.True(File.Exists(zipPath));
+        using var archive = ZipFile.OpenRead(zipPath);
+        Assert.Contains(archive.Entries, entry => entry.FullName == "runtime-build-draft.json");
+        Assert.Contains(archive.Entries, entry => entry.FullName == "IyoMixamo.mmdatabase");
+        Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

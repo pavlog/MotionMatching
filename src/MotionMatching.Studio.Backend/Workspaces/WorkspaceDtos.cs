@@ -163,6 +163,13 @@ public sealed record RuntimeBuildArtifactResponse(
     string Kind,
     string Status);
 
+public sealed record RuntimeBuildExportResponse(
+    string CharacterId,
+    string CharacterName,
+    string BuildFolderPath,
+    string ZipPath,
+    IReadOnlyList<string> IncludedPaths);
+
 public sealed record RuntimeBuildSettingsResponse(
     int SampleFrameStep,
     string ScaleMode);
