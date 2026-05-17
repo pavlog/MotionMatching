@@ -34,13 +34,13 @@ public sealed record SamplingQueryManifest
 
     public double[] Facing { get; init; } = [0, 0, 1];
 
-    public double[] Velocity { get; init; } = [0, 0, 1];
+    public double[] Velocity { get; init; } = [0, 0, 100];
 
     public List<SamplingTrajectoryPointManifest> Trajectory { get; init; } =
     [
-        new() { FrameOffset = 20, Position = [0, 0, 28], Direction = [0, 0, 1] },
-        new() { FrameOffset = 40, Position = [10, 0, 60], Direction = [0, 0, 1] },
-        new() { FrameOffset = 60, Position = [18, 0, 96], Direction = [0, 0, 1] }
+        new() { FrameOffset = 20, Position = [0, 0, 83.33], Direction = [0, 0, 1] },
+        new() { FrameOffset = 40, Position = [0, 0, 166.67], Direction = [0, 0, 1] },
+        new() { FrameOffset = 60, Position = [0, 0, 250], Direction = [0, 0, 1] }
     ];
 }
 

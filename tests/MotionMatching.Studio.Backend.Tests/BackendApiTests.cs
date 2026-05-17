@@ -98,7 +98,9 @@ public sealed class BackendApiTests : IAsyncLifetime
         createResponse.EnsureSuccessStatusCode();
         Assert.Contains("\"name\":\"Turn right query\"", createJson);
         using var createdDocument = JsonDocument.Parse(createJson);
-        var samplingId = createdDocument.RootElement.GetProperty("samplings")[1].GetProperty("id").GetString();
+        var createdSampling = createdDocument.RootElement.GetProperty("samplings")[1];
+        Assert.Equal(new[] { 0.0, 0.0, 100.0 }, createdSampling.GetProperty("velocity").EnumerateArray().Select(value => value.GetDouble()).ToArray());
+        var samplingId = createdSampling.GetProperty("id").GetString();
 
         var renameResponse = await client.PatchAsJsonAsync($"/api/v1/workspaces/browser/characters/{characterId}/samplings/{samplingId}", new { name = "Turn right 90" });
         var renameJson = await renameResponse.Content.ReadAsStringAsync();

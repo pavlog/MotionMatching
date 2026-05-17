@@ -2654,6 +2654,27 @@ function updateVectorValue(values: number[], index: number, value: number) {
   return next
 }
 
+function deriveSamplingVelocityFromTrajectory(trajectory: SamplingQueryResponse['trajectory']) {
+  const firstPoint = trajectory[0]
+  if (!firstPoint) {
+    return [0, 0, 0]
+  }
+
+  const seconds = Math.max(firstPoint.frameOffset, 1) / fallbackFrameRate
+  return [
+    Number(((firstPoint.position[0] ?? 0) / seconds).toFixed(2)),
+    0,
+    Number(((firstPoint.position[2] ?? 0) / seconds).toFixed(2)),
+  ]
+}
+
+function normalizeSamplingDraftVelocity(query: SamplingQueryResponse): SamplingQueryResponse {
+  return {
+    ...query,
+    velocity: deriveSamplingVelocityFromTrajectory(query.trajectory),
+  }
+}
+
 function vectorToYawDegrees(values: number[]) {
   const x = values[0] ?? 0
   const z = values[2] ?? 1
@@ -2765,8 +2786,9 @@ function countSamplingRoleCandidates(query: SamplingQueryResponse, database: Run
 
 function buildSamplingQueryFeatureValues(query: SamplingQueryResponse, normalizationFactor: number) {
   const facing = normalizeVector2(query.facing[0] ?? 0, query.facing[2] ?? 1)
-  const velocityX = query.velocity[0] ?? 0
-  const velocityZ = query.velocity[2] ?? 0
+  const derivedVelocity = deriveSamplingVelocityFromTrajectory(query.trajectory)
+  const velocityX = derivedVelocity[0] ?? 0
+  const velocityZ = derivedVelocity[2] ?? 0
   const values: Record<string, number> = {
     hips_velocity: Number((Math.hypot(velocityX, velocityZ) * normalizationFactor).toFixed(4)),
   }
@@ -3337,7 +3359,8 @@ function SamplingInspector({
   const runtimeScale = runtimeDraft
     ? `${formatRuntimeScaleMode(runtimeDraft.features.scale.mode)} x${formatNumber(runtimeDraft.features.scale.normalizationFactor)}`
     : 'Not generated'
-  const hasChanges = Boolean(sampling && draft && JSON.stringify(sampling) !== JSON.stringify(draft))
+  const normalizedDraft = draft ? normalizeSamplingDraftVelocity(draft) : null
+  const hasChanges = Boolean(sampling && normalizedDraft && JSON.stringify(sampling) !== JSON.stringify(normalizedDraft))
   const facingAngle = draft ? vectorToYawDegrees(draft.facing) : 0
   const matcherPreview = useMemo(
     () => draft && runtimeDraft ? buildSamplingMatcherPreview(draft, runtimeDraft.database) : [],
@@ -3373,13 +3396,6 @@ function SamplingInspector({
     }))
   }
 
-  function updateVector(field: 'facing' | 'velocity', index: number, value: number) {
-    updateDraft((current) => ({
-      ...current,
-      [field]: updateVectorValue(current[field], index, value),
-    }))
-  }
-
   function updateFacingAngle(degrees: number) {
     const radians = degrees * Math.PI / 180
     updateDraft((current) => ({
@@ -3389,9 +3405,8 @@ function SamplingInspector({
   }
 
   function updateTrajectory(index: number, field: 'frameOffset' | 'positionX' | 'positionZ', value: number) {
-    updateDraft((current) => ({
-      ...current,
-      trajectory: current.trajectory.map((point, pointIndex) => {
+    updateDraft((current) => {
+      const trajectory = current.trajectory.map((point, pointIndex) => {
         if (pointIndex !== index) {
           return point
         }
@@ -3404,8 +3419,14 @@ function SamplingInspector({
           ...point,
           position: updateVectorValue(point.position, field === 'positionX' ? 0 : 2, value),
         }
-      }),
-    }))
+      })
+
+      return {
+        ...current,
+        velocity: deriveSamplingVelocityFromTrajectory(trajectory),
+        trajectory,
+      }
+    })
   }
 
   function saveSampling() {
@@ -3418,42 +3439,80 @@ function SamplingInspector({
       roleFilter: draft.roleFilter ?? '',
       capsule: draft.capsule,
       facing: draft.facing,
-      velocity: draft.velocity,
+      velocity: deriveSamplingVelocityFromTrajectory(draft.trajectory),
       trajectory: draft.trajectory,
     })
+  }
+
+  function projectVelocityForFrames(velocity: number[], frameDelta: number) {
+    const seconds = Math.max(frameDelta, 1) / fallbackFrameRate
+    return [
+      Number(((velocity[0] ?? 0) * seconds).toFixed(2)),
+      0,
+      Number(((velocity[2] ?? 0) * seconds).toFixed(2)),
+    ]
   }
 
   function addTrajectoryPoint() {
     updateDraft((current) => {
       const lastPoint = current.trajectory.at(-1)
       const nextFrame = (lastPoint?.frameOffset ?? 0) + 20
+      const frameDelta = lastPoint ? nextFrame - lastPoint.frameOffset : nextFrame
+      const velocityOffset = projectVelocityForFrames(deriveSamplingVelocityFromTrajectory(current.trajectory), frameDelta)
       const nextPosition = lastPoint
         ? [
-            (lastPoint.position[0] ?? 0) + (current.velocity[0] ?? 0) * 20,
+            Number(((lastPoint.position[0] ?? 0) + velocityOffset[0]).toFixed(2)),
             0,
-            (lastPoint.position[2] ?? 0) + Math.max((current.velocity[2] ?? 1) * 20, 20),
+            Number(((lastPoint.position[2] ?? 0) + velocityOffset[2]).toFixed(2)),
           ]
-        : [0, 0, 20]
+        : velocityOffset
+
+      const trajectory = [
+        ...current.trajectory,
+        {
+          frameOffset: nextFrame,
+          position: nextPosition,
+          direction: current.facing,
+        },
+      ]
 
       return {
         ...current,
-        trajectory: [
-          ...current.trajectory,
-          {
-            frameOffset: nextFrame,
-            position: nextPosition,
-            direction: current.facing,
-          },
-        ],
+        velocity: deriveSamplingVelocityFromTrajectory(trajectory),
+        trajectory,
       }
     })
   }
 
   function deleteTrajectoryPoint(index: number) {
-    updateDraft((current) => ({
-      ...current,
-      trajectory: current.trajectory.filter((_, pointIndex) => pointIndex !== index),
-    }))
+    updateDraft((current) => {
+      const trajectory = current.trajectory.filter((_, pointIndex) => pointIndex !== index)
+      return {
+        ...current,
+        velocity: deriveSamplingVelocityFromTrajectory(trajectory),
+        trajectory,
+      }
+    })
+  }
+
+  function trajectoryPointSpeed(index: number) {
+    if (!draft) {
+      return 0
+    }
+
+    const point = draft.trajectory[index]
+    if (!point) {
+      return 0
+    }
+
+    const previousPoint = draft.trajectory[index - 1]
+    const previousFrame = previousPoint?.frameOffset ?? 0
+    const previousPosition = previousPoint?.position ?? [0, 0, 0]
+    const frameDelta = Math.max(point.frameOffset - previousFrame, 1)
+    const seconds = frameDelta / fallbackFrameRate
+    const dx = (point.position[0] ?? 0) - (previousPosition[0] ?? 0)
+    const dz = (point.position[2] ?? 0) - (previousPosition[2] ?? 0)
+    return Math.hypot(dx, dz) / seconds
   }
 
   return (
@@ -3502,11 +3561,11 @@ function SamplingInspector({
             </label>
             <label className="setting-field">
               Velocity X
-              <input type="number" step={0.1} value={draft.velocity[0] ?? 0} onChange={(event) => updateVector('velocity', 0, Number(event.target.value) || 0)} />
+              <input type="number" value={deriveSamplingVelocityFromTrajectory(draft.trajectory)[0] ?? 0} readOnly />
             </label>
             <label className="setting-field">
               Velocity Z
-              <input type="number" step={0.1} value={draft.velocity[2] ?? 0} onChange={(event) => updateVector('velocity', 2, Number(event.target.value) || 0)} />
+              <input type="number" value={deriveSamplingVelocityFromTrajectory(draft.trajectory)[2] ?? 0} readOnly />
             </label>
           </div>
           <div className="sampling-trajectory-header">
@@ -3528,6 +3587,10 @@ function SamplingInspector({
                   Z
                   <input type="number" step={1} value={point.position[2] ?? 0} onChange={(event) => updateTrajectory(index, 'positionZ', Number(event.target.value) || 0)} />
                 </label>
+                <div className="sampling-trajectory-speed">
+                  <span>Speed</span>
+                  <strong>{`${formatNumber(trajectoryPointSpeed(index))} cm/s`}</strong>
+                </div>
                 <button
                   type="button"
                   className="mini-action danger"

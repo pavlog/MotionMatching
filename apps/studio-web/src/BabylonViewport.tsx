@@ -11,6 +11,7 @@ import {
   DynamicTexture,
   Engine,
   HemisphericLight,
+  Matrix,
   Mesh,
   MeshBuilder,
   PointerEventTypes,
@@ -967,8 +968,8 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
     .filter((bone) => bone.translation.length >= 3)
     .filter((bone) => !bone.boneName.toLowerCase().includes('end'))
     .slice(0, 72)
-  const localOffsets = new Map(visibleBones.map((bone) => [normalizeGhostBoneName(bone.boneName), vectorFromSamplingArray(bone.translation, Vector3.Zero())]))
-  const bonePositions = buildGhostBoneWorldPositions(localOffsets)
+  const localBones = new Map(visibleBones.map((bone) => [normalizeGhostBoneName(bone.boneName), toGhostLocalBone(bone)]))
+  const bonePositions = anchorGhostPoseToSamplingOrigin(buildGhostBoneWorldPositions(localBones))
   const skeletonLines = buildGhostSkeletonLines(bonePositions)
   if (skeletonLines.length) {
     const skeleton = MeshBuilder.CreateLineSystem('sampling-ghost-pose-skeleton', { lines: skeletonLines }, scene)
@@ -979,13 +980,14 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
   }
 
   for (const [index, bone] of visibleBones.entries()) {
-    const position = findGhostBonePosition(bonePositions, bone.boneName) ?? vectorFromSamplingArray(bone.translation, Vector3.Zero())
+    const position = findGhostBonePosition(bonePositions, bone.boneName) ??
+      gltfPosePositionToViewport(vectorFromSamplingArray(bone.translation, Vector3.Zero()).scale(ghostPoseTranslationScale))
     if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
       continue
     }
 
     const marker = MeshBuilder.CreateSphere(`sampling-ghost-pose-${index}`, {
-      diameter: isMainGhostBone(bone.boneName) ? 4.6 : 2.8,
+      diameter: isMainGhostBone(bone.boneName) ? 3.2 : 1.8,
       segments: 8,
     }, scene)
     marker.position = position
@@ -997,41 +999,71 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
   return meshes
 }
 
-function buildGhostBoneWorldPositions(localOffsets: Map<string, Vector3>) {
+const ghostPoseTranslationScale = 100
+
+type GhostLocalBone = {
+  translation: Vector3
+  rotation: Quaternion
+}
+
+function toGhostLocalBone(bone: RuntimePoseSampleResponse['bones'][number]): GhostLocalBone {
+  return {
+    translation: vectorFromSamplingArray(bone.translation, Vector3.Zero()).scale(ghostPoseTranslationScale),
+    rotation: quaternionFromSamplingArray(bone.rotation),
+  }
+}
+
+function buildGhostBoneWorldPositions(localBones: Map<string, GhostLocalBone>) {
   const chains = [
-    ['hips', 'spine', 'spine1', 'spine2', 'neck', 'head'],
-    ['spine2', 'leftshoulder', 'leftarm', 'leftforearm', 'lefthand'],
-    ['spine2', 'rightshoulder', 'rightarm', 'rightforearm', 'righthand'],
-    ['hips', 'leftupleg', 'leftleg', 'leftfoot', 'lefttoebase'],
-    ['hips', 'rightupleg', 'rightleg', 'rightfoot', 'righttoebase'],
+    ['hips', 'spine', 'chest', 'upperchest', 'neck', 'head'],
+    ['upperchest', 'leftshoulder', 'leftupperarm', 'leftlowerarm', 'lefthand'],
+    ['upperchest', 'rightshoulder', 'rightupperarm', 'rightlowerarm', 'righthand'],
+    ['hips', 'leftupperleg', 'leftlowerleg', 'leftfoot', 'lefttoebase'],
+    ['hips', 'rightupperleg', 'rightlowerleg', 'rightfoot', 'righttoebase'],
   ]
-  const worldPositions = new Map<string, Vector3>()
-  const rootPosition = findGhostBonePosition(localOffsets, 'hips') ?? Vector3.Zero()
-  worldPositions.set('hips', rootPosition.clone())
+  const worldBones = new Map<string, { position: Vector3; rotation: Quaternion }>()
+  const rootBone = findGhostLocalBone(localBones, 'hips')
+  const rootPosition = rootBone?.translation.clone() ?? Vector3.Zero()
+  const rootRotation = rootBone?.rotation.clone() ?? Quaternion.Identity()
+  worldBones.set('hips', { position: rootPosition, rotation: rootRotation })
 
   for (const chain of chains) {
-    let currentPosition = findGhostBonePosition(worldPositions, chain[0]) ?? rootPosition.clone()
+    let parent = findGhostWorldBone(worldBones, chain[0]) ?? worldBones.get('hips') ?? { position: rootPosition, rotation: rootRotation }
     for (const bone of chain.slice(1)) {
-      const localOffset = findGhostBonePosition(localOffsets, bone)
-      if (!localOffset) {
+      const localBone = findGhostLocalBone(localBones, bone)
+      if (!localBone) {
         continue
       }
 
-      currentPosition = currentPosition.add(localOffset)
-      worldPositions.set(normalizeGhostBoneName(bone), currentPosition)
+      const parentRotation = Matrix.Identity()
+      Matrix.FromQuaternionToRef(parent.rotation, parentRotation)
+      const rotatedOffset = Vector3.TransformNormal(localBone.translation, parentRotation)
+      const position = parent.position.add(rotatedOffset)
+      const rotation = parent.rotation.multiply(localBone.rotation).normalize()
+      parent = { position, rotation }
+      worldBones.set(normalizeGhostBoneName(bone), parent)
     }
   }
 
-  return worldPositions.size > 1 ? worldPositions : localOffsets
+  const worldPositions = new Map([...worldBones.entries()].map(([key, bone]) => [key, gltfPosePositionToViewport(bone.position)]))
+  return worldPositions.size > 1
+    ? worldPositions
+    : new Map([...localBones.entries()].map(([key, bone]) => [key, gltfPosePositionToViewport(bone.translation)]))
+}
+
+function anchorGhostPoseToSamplingOrigin(bonePositions: Map<string, Vector3>) {
+  const hipsPosition = findGhostBonePosition(bonePositions, 'hips') ?? [...bonePositions.values()][0] ?? Vector3.Zero()
+  const offset = new Vector3(-hipsPosition.x, 0, -hipsPosition.z)
+  return new Map([...bonePositions.entries()].map(([key, position]) => [key, position.add(offset)]))
 }
 
 function buildGhostSkeletonLines(bonePositions: Map<string, Vector3>) {
   const chains = [
-    ['hips', 'spine', 'spine1', 'spine2', 'neck', 'head'],
-    ['spine2', 'leftshoulder', 'leftarm', 'leftforearm', 'lefthand'],
-    ['spine2', 'rightshoulder', 'rightarm', 'rightforearm', 'righthand'],
-    ['hips', 'leftupleg', 'leftleg', 'leftfoot', 'lefttoebase'],
-    ['hips', 'rightupleg', 'rightleg', 'rightfoot', 'righttoebase'],
+    ['hips', 'spine', 'chest', 'upperchest', 'neck', 'head'],
+    ['upperchest', 'leftshoulder', 'leftupperarm', 'leftlowerarm', 'lefthand'],
+    ['upperchest', 'rightshoulder', 'rightupperarm', 'rightlowerarm', 'righthand'],
+    ['hips', 'leftupperleg', 'leftlowerleg', 'leftfoot', 'lefttoebase'],
+    ['hips', 'rightupperleg', 'rightlowerleg', 'rightfoot', 'righttoebase'],
   ]
   const lines: Vector3[][] = []
 
@@ -1050,11 +1082,59 @@ function buildGhostSkeletonLines(bonePositions: Map<string, Vector3>) {
   return lines
 }
 
+const ghostBoneAliases: Record<string, string[]> = {
+  hips: ['hips', 'pelvis'],
+  spine: ['spine'],
+  chest: ['chest', 'spine1'],
+  upperchest: ['upperchest', 'spine2'],
+  neck: ['neck'],
+  head: ['head'],
+  leftshoulder: ['leftshoulder'],
+  leftupperarm: ['leftupperarm', 'leftarm'],
+  leftlowerarm: ['leftlowerarm', 'leftforearm'],
+  lefthand: ['lefthand'],
+  rightshoulder: ['rightshoulder'],
+  rightupperarm: ['rightupperarm', 'rightarm'],
+  rightlowerarm: ['rightlowerarm', 'rightforearm'],
+  righthand: ['righthand'],
+  leftupperleg: ['leftupperleg', 'leftupleg'],
+  leftlowerleg: ['leftlowerleg', 'leftleg'],
+  leftfoot: ['leftfoot'],
+  lefttoebase: ['lefttoebase', 'lefttoe'],
+  rightupperleg: ['rightupperleg', 'rightupleg'],
+  rightlowerleg: ['rightlowerleg', 'rightleg'],
+  rightfoot: ['rightfoot'],
+  righttoebase: ['righttoebase', 'righttoe'],
+}
+
+function findGhostWorldBone(bones: Map<string, { position: Vector3; rotation: Quaternion }>, boneKey: string) {
+  const position = findGhostBonePosition(new Map([...bones.entries()].map(([key, bone]) => [key, bone.position])), boneKey)
+  if (!position) {
+    return null
+  }
+
+  const matchedKey = findGhostBoneKey(bones, boneKey)
+  return matchedKey ? bones.get(matchedKey) ?? null : null
+}
+
+function findGhostLocalBone(bones: Map<string, GhostLocalBone>, boneKey: string) {
+  const matchedKey = findGhostBoneKey(bones, boneKey)
+  return matchedKey ? bones.get(matchedKey) ?? null : null
+}
+
 function findGhostBonePosition(bonePositions: Map<string, Vector3>, boneKey: string) {
+  const matchedKey = findGhostBoneKey(bonePositions, boneKey)
+  return matchedKey ? bonePositions.get(matchedKey) ?? null : null
+}
+
+function findGhostBoneKey<T>(bones: Map<string, T>, boneKey: string) {
   const normalizedBoneKey = normalizeGhostBoneName(boneKey)
-  for (const [name, position] of bonePositions.entries()) {
-    if (name.endsWith(normalizedBoneKey) || name.includes(normalizedBoneKey)) {
-      return position
+  const aliases = ghostBoneAliases[normalizedBoneKey] ?? [normalizedBoneKey]
+  for (const alias of aliases) {
+    for (const name of bones.keys()) {
+      if (name.endsWith(alias) || name.includes(alias)) {
+        return name
+      }
     }
   }
 
@@ -1063,6 +1143,18 @@ function findGhostBonePosition(bonePositions: Map<string, Vector3>, boneKey: str
 
 function normalizeGhostBoneName(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function quaternionFromSamplingArray(values: number[] | undefined) {
+  if (!values || values.length < 4 || values.some((value) => !Number.isFinite(value))) {
+    return Quaternion.Identity()
+  }
+
+  return new Quaternion(values[0], values[1], values[2], values[3]).normalize()
+}
+
+function gltfPosePositionToViewport(position: Vector3) {
+  return new Vector3(position.x, position.z, position.y)
 }
 
 function isMainGhostBone(boneName: string) {
