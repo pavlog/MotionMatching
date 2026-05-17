@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Footprints, Move3D, Scan } from 'lucide-react'
+import { CirclePlus, Footprints, Move3D, Scan, Trash2 } from 'lucide-react'
 import {
   Animation,
   AnimationGroup,
@@ -11,10 +11,12 @@ import {
   DynamicTexture,
   Engine,
   HemisphericLight,
+  Material,
   Matrix,
   Mesh,
   MeshBuilder,
   PointerEventTypes,
+  PointerInfo,
   Quaternion,
   Scene,
   SceneLoader,
@@ -24,6 +26,14 @@ import {
 } from '@babylonjs/core'
 import '@babylonjs/loaders/glTF'
 import type { FootContactDiagnosticsResponse, RuntimePoseSampleResponse, SamplingQueryResponse } from './api'
+
+export type SamplingGhostPosePreview = {
+  pose: RuntimePoseSampleResponse
+  anchor: number[]
+  heading: number[]
+  alpha?: number
+  scale?: number
+}
 
 interface BabylonViewportProps {
   previewUrl: string | null
@@ -36,7 +46,11 @@ interface BabylonViewportProps {
   clipMotionMode: ClipMotionMode
   samplingPreview: boolean
   samplingQuery: SamplingQueryResponse | null
-  samplingGhostPose: RuntimePoseSampleResponse | null
+  samplingFrameRate: number
+  samplingGhostPoses: SamplingGhostPosePreview[]
+  samplingPreviewFrame: number
+  samplingQueryVectorFrames: number[]
+  showSamplingQueryVectors: boolean
   label: string
   onClipMotionModeChange?: (mode: ClipMotionMode) => void
   onAnimationStateChange?: (state: string) => void
@@ -74,6 +88,21 @@ type SamplingDragState = {
   startHeight: number
   startRadius: number
 }
+type SamplingContextClickState = {
+  startClientX: number
+  startClientY: number
+}
+
+type SamplingTrajectoryPoint = SamplingQueryResponse['trajectory'][number]
+type SamplingViewportContextMenu = {
+  x: number
+  y: number
+  insertAfterIndex?: number
+  insertSegmentIndex?: number
+  trajectoryIndex?: number
+  pickedPoint?: Vector3
+  canDelete?: boolean
+}
 
 const isoViewDirection = new Vector3(-1, 0.8, -1).normalize()
 
@@ -92,7 +121,11 @@ export function BabylonViewport({
   clipMotionMode,
   samplingPreview,
   samplingQuery,
-  samplingGhostPose,
+  samplingFrameRate,
+  samplingGhostPoses,
+  samplingPreviewFrame,
+  samplingQueryVectorFrames,
+  showSamplingQueryVectors,
   label,
   onClipMotionModeChange,
   onAnimationStateChange,
@@ -113,6 +146,7 @@ export function BabylonViewport({
   const samplingPreviewRef = useRef(samplingPreview)
   const samplingQueryRef = useRef<SamplingQueryResponse | null>(samplingQuery)
   const samplingDragRef = useRef<SamplingDragState | null>(null)
+  const samplingContextClickRef = useRef<SamplingContextClickState | null>(null)
   const onSamplingQueryChangeRef = useRef<typeof onSamplingQueryChange>(onSamplingQueryChange)
   const characterPoseRef = useRef(new Map<PoseTarget, PoseSnapshot>())
   const clipScrubRef = useRef({ frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate, durationSeconds: clipDurationSeconds })
@@ -121,11 +155,41 @@ export function BabylonViewport({
   const [animationState, setAnimationState] = useState('none')
   const [showFootContacts, setShowFootContacts] = useState(true)
   const [modelVersion, setModelVersion] = useState(0)
+  const [samplingViewportMenu, setSamplingViewportMenu] = useState<SamplingViewportContextMenu | null>(null)
   const statusText = status.kind === 'ready' ? label : status.message
 
   useEffect(() => {
     clipScrubRef.current = { frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate, durationSeconds: clipDurationSeconds }
   }, [clipFrame, clipFrameCount, clipFrameRate, clipDurationSeconds])
+
+  const applySamplingViewportInsert = (menu: SamplingViewportContextMenu) => {
+    const currentQuery = samplingQueryRef.current
+    if (!currentQuery) {
+      return
+    }
+
+    const trajectory = typeof menu.insertSegmentIndex === 'number' && menu.pickedPoint
+      ? insertSamplingTrajectoryPointOnSegment(currentQuery.trajectory, menu.insertSegmentIndex, menu.pickedPoint)
+      : insertSamplingTrajectoryPoint(currentQuery.trajectory, menu.insertAfterIndex ?? menu.trajectoryIndex ?? 0, currentQuery.facing, samplingFrameRate)
+    onSamplingQueryChangeRef.current?.({
+      ...currentQuery,
+      trajectory,
+    })
+    setSamplingViewportMenu(null)
+  }
+
+  const applySamplingViewportDelete = (menu: SamplingViewportContextMenu) => {
+    const currentQuery = samplingQueryRef.current
+    if (!currentQuery || typeof menu.trajectoryIndex !== 'number' || currentQuery.trajectory.length <= 1) {
+      return
+    }
+
+    onSamplingQueryChangeRef.current?.({
+      ...currentQuery,
+      trajectory: currentQuery.trajectory.filter((_, index) => index !== menu.trajectoryIndex),
+    })
+    setSamplingViewportMenu(null)
+  }
 
   useEffect(() => {
     footContactsRef.current = footContacts
@@ -365,18 +429,111 @@ export function BabylonViewport({
         event.preventDefault()
       }
     }
+    const suppressCanvasContextMenu = (event: MouseEvent) => {
+      if (samplingPreviewRef.current) {
+        event.preventDefault()
+      }
+    }
+    canvas.addEventListener('contextmenu', suppressCanvasContextMenu)
+    const openSamplingContextMenu = (pointerInfo: PointerInfo, pointerEvent: PointerEvent) => {
+      const pickedMesh = pointerInfo.pickInfo?.pickedMesh
+      const currentQuery = samplingQueryRef.current
+      const groundPoint = pointerInfo.pickInfo?.pickedPoint?.clone() ?? pickSamplingDragPoint(scene)?.clone()
+      const trajectoryIndex = typeof pickedMesh?.metadata?.samplingTrajectoryIndex === 'number'
+        ? pickedMesh.metadata.samplingTrajectoryIndex as number
+        : null
+      const nearestTrajectoryIndex = currentQuery
+        ? findNearestSamplingTrajectoryPointIndex(currentQuery, scene, camera, pointerEvent)
+        : null
+      if (nearestTrajectoryIndex !== null) {
+        setSamplingViewportMenu({
+          x: pointerEvent.clientX,
+          y: pointerEvent.clientY,
+          insertAfterIndex: nearestTrajectoryIndex,
+          trajectoryIndex: nearestTrajectoryIndex,
+          canDelete: (currentQuery?.trajectory.length ?? 0) > 1,
+        })
+        pointerInfo.event.preventDefault()
+        return
+      }
+
+      if (pickedMesh instanceof Mesh && typeof pickedMesh.metadata?.samplingInsertSegmentIndex === 'number' && pointerInfo.pickInfo?.pickedPoint) {
+        setSamplingViewportMenu({
+          x: pointerEvent.clientX,
+          y: pointerEvent.clientY,
+          insertSegmentIndex: pickedMesh.metadata.samplingInsertSegmentIndex as number,
+          pickedPoint: pointerInfo.pickInfo.pickedPoint.clone(),
+        })
+        pointerInfo.event.preventDefault()
+        return
+      }
+
+      if (pickedMesh instanceof Mesh && typeof pickedMesh.metadata?.samplingInsertAfterIndex === 'number') {
+        setSamplingViewportMenu({
+          x: pointerEvent.clientX,
+          y: pointerEvent.clientY,
+          insertAfterIndex: pickedMesh.metadata.samplingInsertAfterIndex as number,
+        })
+        pointerInfo.event.preventDefault()
+        return
+      }
+
+      if (pickedMesh instanceof Mesh && trajectoryIndex !== null) {
+        setSamplingViewportMenu({
+          x: pointerEvent.clientX,
+          y: pointerEvent.clientY,
+          insertAfterIndex: trajectoryIndex,
+          trajectoryIndex,
+          canDelete: (currentQuery?.trajectory.length ?? 0) > 1,
+        })
+        pointerInfo.event.preventDefault()
+        return
+      }
+
+      if (currentQuery && groundPoint) {
+        const nearestSegmentIndex = findNearestSamplingTrajectorySegmentIndex(currentQuery, groundPoint)
+        if (nearestSegmentIndex !== null) {
+          setSamplingViewportMenu({
+            x: pointerEvent.clientX,
+            y: pointerEvent.clientY,
+            insertSegmentIndex: nearestSegmentIndex,
+            pickedPoint: groundPoint,
+          })
+          pointerInfo.event.preventDefault()
+          return
+        }
+      }
+
+      pointerInfo.event.preventDefault()
+    }
     const pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
       if (!samplingPreviewRef.current || !samplingQueryRef.current) {
         return
       }
 
       if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+        setSamplingViewportMenu(null)
         const pickedMesh = pointerInfo.pickInfo?.pickedMesh
         const pointerEvent = pointerInfo.event as PointerEvent
+        const isPrimaryButton = pointerEvent.button === 0
+        const isContextButton = pointerEvent.button === 2
         const trajectoryIndex = typeof pickedMesh?.metadata?.samplingTrajectoryIndex === 'number'
           ? pickedMesh.metadata.samplingTrajectoryIndex as number
           : null
+
+        if (isContextButton) {
+          samplingContextClickRef.current = {
+            startClientX: pointerEvent.clientX,
+            startClientY: pointerEvent.clientY,
+          }
+          return
+        }
+
         if (!(pickedMesh instanceof Mesh)) {
+          return
+        }
+
+        if (!isPrimaryButton) {
           return
         }
 
@@ -451,6 +608,17 @@ export function BabylonViewport({
         return
       }
 
+      if (pointerInfo.type === PointerEventTypes.POINTERUP && samplingContextClickRef.current) {
+        const pointerEvent = pointerInfo.event as PointerEvent
+        const click = samplingContextClickRef.current
+        samplingContextClickRef.current = null
+        const dragDistance = Math.hypot(pointerEvent.clientX - click.startClientX, pointerEvent.clientY - click.startClientY)
+        if (dragDistance <= 4) {
+          openSamplingContextMenu(pointerInfo, pointerEvent)
+        }
+        return
+      }
+
       if (pointerInfo.type === PointerEventTypes.POINTERUP && samplingDragRef.current) {
         const drag = samplingDragRef.current
         samplingDragRef.current = null
@@ -521,6 +689,7 @@ export function BabylonViewport({
     return () => {
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', handleKeyDown)
+      canvas.removeEventListener('contextmenu', suppressCanvasContextMenu)
       scene.onPointerObservable.remove(pointerObserver)
       importedMeshesRef.current = []
       clipAnimationRef.current?.dispose()
@@ -704,8 +873,15 @@ export function BabylonViewport({
       return
     }
 
-    samplingPreviewMeshesRef.current = createSamplingPreview(scene, samplingQuery)
-  }, [modelVersion, samplingPreview, samplingQuery])
+    samplingPreviewMeshesRef.current = createSamplingPreview(
+      scene,
+      samplingQuery,
+      samplingFrameRate,
+      samplingPreviewFrame,
+      showSamplingQueryVectors,
+      samplingQueryVectorFrames,
+    )
+  }, [modelVersion, samplingFrameRate, samplingPreview, samplingPreviewFrame, samplingQuery, samplingQueryVectorFrames, showSamplingQueryVectors])
 
   useEffect(() => {
     const scene = sceneRef.current
@@ -715,12 +891,14 @@ export function BabylonViewport({
 
     disposeSamplingPreview(samplingGhostPoseMeshesRef.current)
     samplingGhostPoseMeshesRef.current = []
-    if (!samplingPreview || !samplingGhostPose) {
+    if (!samplingPreview || !samplingGhostPoses.length) {
       return
     }
 
-    samplingGhostPoseMeshesRef.current = createSamplingGhostPose(scene, samplingGhostPose)
-  }, [modelVersion, samplingGhostPose, samplingPreview])
+    samplingGhostPoseMeshesRef.current = samplingGhostPoses.flatMap((ghost) =>
+      createSamplingGhostPose(scene, ghost.pose, ghost.anchor, ghost.heading, ghost.alpha, ghost.scale),
+    )
+  }, [modelVersion, samplingGhostPoses, samplingPreview])
 
   return (
     <section className="viewport-panel" aria-label="3D viewport" data-animation-state={animationState}>
@@ -753,6 +931,37 @@ export function BabylonViewport({
           <Footprints size={15} aria-hidden="true" />
         </button>
       </div>
+      {samplingViewportMenu ? (
+        <div
+          className="context-menu sampling-viewport-menu"
+          style={{ left: samplingViewportMenu.x, top: samplingViewportMenu.y }}
+          role="menu"
+          aria-label="Sampling trajectory actions"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="context-menu-item"
+            role="menuitem"
+            onClick={() => applySamplingViewportInsert(samplingViewportMenu)}
+          >
+            <CirclePlus size={14} aria-hidden="true" />
+            Insert point
+          </button>
+          {typeof samplingViewportMenu.trajectoryIndex === 'number' ? (
+            <button
+              type="button"
+              className="context-menu-item danger"
+              role="menuitem"
+              disabled={!samplingViewportMenu.canDelete}
+              onClick={() => applySamplingViewportDelete(samplingViewportMenu)}
+            >
+              <Trash2 size={14} aria-hidden="true" />
+              Delete point
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="navigation-widget" aria-label="Viewport navigation">
         <svg ref={axisTriadRef} className="axis-triad" viewBox="0 0 96 96" role="group" aria-label="Axis view shortcuts">
           <line data-axis-line="negZ" className="axis-line z negative" x1="48" y1="48" x2="48" y2="48" />
@@ -808,7 +1017,14 @@ export function BabylonViewport({
   )
 }
 
-function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryResponse | null) {
+function createSamplingPreview(
+  scene: Scene,
+  samplingQuery: SamplingQueryResponse | null,
+  samplingFrameRate: number,
+  samplingPreviewFrame: number,
+  showQueryVectors: boolean,
+  queryVectorFrames: number[],
+) {
   const meshes: Mesh[] = []
   const capsuleMaterial = new StandardMaterial('sampling-capsule-material', scene)
   capsuleMaterial.diffuseColor = new Color3(0.16, 0.62, 1)
@@ -827,6 +1043,17 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
   const handleMaterial = new StandardMaterial('sampling-handle-material', scene)
   handleMaterial.diffuseColor = new Color3(0.92, 0.96, 1)
   handleMaterial.emissiveColor = new Color3(0.32, 0.44, 0.58)
+
+  const insertMaterial = new StandardMaterial('sampling-insert-material', scene)
+  insertMaterial.diffuseColor = new Color3(0.45, 0.92, 0.62)
+  insertMaterial.emissiveColor = new Color3(0.1, 0.36, 0.19)
+
+  const insertSegmentMaterial = new StandardMaterial('sampling-insert-segment-material', scene)
+  insertSegmentMaterial.diffuseColor = new Color3(0.45, 0.92, 0.62)
+  insertSegmentMaterial.emissiveColor = new Color3(0.05, 0.16, 0.08)
+  insertSegmentMaterial.alpha = 0.08
+  insertSegmentMaterial.transparencyMode = Material.MATERIAL_ALPHABLEND
+  insertSegmentMaterial.disableDepthWrite = true
 
   const capsuleHeight = Math.max(samplingQuery?.capsule.height ?? 72, 1)
   const capsuleRadius = Math.max(samplingQuery?.capsule.radius ?? 14, 1)
@@ -893,6 +1120,17 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
         new Vector3(10, 2, 60),
         new Vector3(18, 2, 96),
       ]
+  const trajectory = samplingQuery?.trajectory ?? []
+  const trajectorySpeeds = buildSamplingTrajectoryOutgoingSpeeds(trajectory, samplingFrameRate)
+  if (trajectory.length) {
+    meshes.push(createSamplingLabel(
+      scene,
+      `${formatSamplingSpeed(trajectorySpeeds.origin)} cm/s`,
+      new Vector3(0, 15, 0),
+      'sampling-trajectory-origin-speed-label',
+    ))
+  }
+
   for (const [index, point] of trajectoryPoints.entries()) {
     const marker = MeshBuilder.CreateSphere(`sampling-trajectory-point-${index + 1}`, {
       diameter: 7,
@@ -906,6 +1144,38 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
 
     const frameOffset = samplingQuery?.trajectory[index]?.frameOffset ?? (index + 1) * 20
     meshes.push(createSamplingLabel(scene, `+${frameOffset}f`, point.add(new Vector3(0, 9, 0)), `sampling-trajectory-label-${index}`))
+    if (samplingQuery?.trajectory[index]) {
+      meshes.push(createSamplingLabel(
+        scene,
+        `${formatSamplingSpeed(trajectorySpeeds.byIndex[index] ?? 0)} cm/s`,
+        point.add(new Vector3(0, 16, 0)),
+        `sampling-trajectory-speed-label-${index}`,
+      ))
+    }
+  }
+
+  for (const segment of buildSamplingInsertSegments(trajectory)) {
+    const segmentMesh = MeshBuilder.CreateTube(`sampling-trajectory-insert-segment-${segment.segmentIndex}`, {
+      path: segment.path,
+      radius: 3.2,
+      tessellation: 8,
+    }, scene)
+    segmentMesh.material = insertSegmentMaterial
+    segmentMesh.isPickable = true
+    segmentMesh.metadata = { samplingInsertSegmentIndex: segment.segmentIndex }
+    meshes.push(segmentMesh)
+  }
+
+  for (const insertHandle of buildSamplingInsertHandles(trajectory, samplingFrameRate)) {
+    const marker = MeshBuilder.CreateSphere(`sampling-trajectory-insert-${insertHandle.afterIndex}`, {
+      diameter: 5,
+      segments: 12,
+    }, scene)
+    marker.position = vectorFromSamplingArray(insertHandle.position, Vector3.Zero()).add(new Vector3(0, 4, 0))
+    marker.material = insertMaterial
+    marker.isPickable = true
+    marker.metadata = { samplingInsertAfterIndex: insertHandle.afterIndex }
+    meshes.push(marker)
   }
 
   const trajectoryLine = MeshBuilder.CreateLines('sampling-trajectory-line', {
@@ -914,6 +1184,10 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
   trajectoryLine.color = new Color3(1, 0.7, 0.22)
   trajectoryLine.isPickable = false
   meshes.push(trajectoryLine)
+
+  if (samplingQuery && showQueryVectors) {
+    meshes.push(...createSamplingQueryVectors(scene, samplingQuery, samplingPreviewFrame, queryVectorFrames))
+  }
 
   const dragPlane = MeshBuilder.CreateGround('sampling-drag-plane', {
     width: 10000,
@@ -929,6 +1203,402 @@ function createSamplingPreview(scene: Scene, samplingQuery: SamplingQueryRespons
   meshes.push(dragPlane)
 
   return meshes
+}
+
+function buildSamplingInsertHandles(trajectory: SamplingTrajectoryPoint[], samplingFrameRate: number) {
+  return trajectory.map((point, index) => {
+    const nextPoint = trajectory[index + 1]
+    const insertedPoint = nextPoint
+      ? midpointSamplingTrajectoryPoint(point, nextPoint)
+      : extrapolateSamplingTrajectoryPoint(point, trajectory[index - 1], [0, 0, 1], samplingFrameRate)
+    return {
+      afterIndex: index,
+      position: insertedPoint.position,
+    }
+  })
+}
+
+function buildSamplingInsertSegments(trajectory: SamplingTrajectoryPoint[]) {
+  if (!trajectory.length) {
+    return []
+  }
+
+  const points = [
+    Vector3.Zero(),
+    ...trajectory.map((point) => vectorFromSamplingArray(point.position, Vector3.Zero())),
+  ].map((point) => point.add(new Vector3(0, 2, 0)))
+
+  return points.slice(0, -1).map((point, index) => ({
+    segmentIndex: index,
+    path: [point, points[index + 1]],
+  }))
+}
+
+function buildSamplingTrajectoryOutgoingSpeeds(trajectory: SamplingTrajectoryPoint[], samplingFrameRate: number) {
+  const sortedTrajectory = [...trajectory]
+    .map((point, index) => ({ point, index }))
+    .sort((left, right) => left.point.frameOffset - right.point.frameOffset)
+  const byIndex: number[] = Array.from({ length: trajectory.length }, () => 0)
+  const firstPoint = sortedTrajectory[0]?.point
+  const origin = firstPoint
+    ? calculateSamplingSegmentSpeed(0, [0, 0, 0], firstPoint.frameOffset, firstPoint.position, samplingFrameRate)
+    : 0
+
+  for (const [sortedIndex, current] of sortedTrajectory.entries()) {
+    const nextPoint = sortedTrajectory[sortedIndex + 1]?.point
+    byIndex[current.index] = nextPoint
+      ? calculateSamplingSegmentSpeed(current.point.frameOffset, current.point.position, nextPoint.frameOffset, nextPoint.position, samplingFrameRate)
+      : 0
+  }
+
+  return { origin, byIndex }
+}
+
+function createSamplingQueryVectors(
+  scene: Scene,
+  samplingQuery: SamplingQueryResponse,
+  samplingPreviewFrame: number,
+  queryVectorFrames: number[],
+) {
+  const meshes: Mesh[] = []
+  const current = getSamplingTimelinePlacement(samplingQuery, samplingPreviewFrame)
+  const currentAnchor = current.anchor.add(new Vector3(0, 6, 0))
+  const frames = queryVectorFrames.length
+    ? queryVectorFrames
+    : samplingQuery.trajectory.map((point) => point.frameOffset)
+
+  const anchorMaterial = new StandardMaterial('sampling-query-anchor-material', scene)
+  anchorMaterial.diffuseColor = new Color3(0.36, 0.72, 1)
+  anchorMaterial.emissiveColor = new Color3(0.08, 0.28, 0.48)
+
+  const directionMaterial = new StandardMaterial('sampling-query-direction-material', scene)
+  directionMaterial.diffuseColor = new Color3(0.45, 0.92, 0.62)
+  directionMaterial.emissiveColor = new Color3(0.12, 0.36, 0.18)
+  directionMaterial.alpha = 0.72
+  directionMaterial.transparencyMode = Material.MATERIAL_ALPHABLEND
+  directionMaterial.disableDepthWrite = true
+
+  const anchor = MeshBuilder.CreateSphere('sampling-query-anchor', {
+    diameter: 6,
+    segments: 16,
+  }, scene)
+  anchor.position = currentAnchor
+  anchor.material = anchorMaterial
+  anchor.isPickable = false
+  meshes.push(anchor)
+
+  for (const frameOffset of frames) {
+    const futureFrame = samplingPreviewFrame + frameOffset
+    const future = getSamplingTimelinePlacement(samplingQuery, futureFrame)
+    const futureAnchor = future.anchor.add(new Vector3(0, 6, 0))
+    const positionLine = MeshBuilder.CreateLines(`sampling-query-position-${frameOffset}`, {
+      points: [currentAnchor, futureAnchor],
+    }, scene)
+    positionLine.color = new Color3(0.36, 0.72, 1)
+    positionLine.alpha = 0.9
+    positionLine.visibility = 0.9
+    positionLine.isPickable = false
+    meshes.push(positionLine)
+
+    const marker = MeshBuilder.CreateSphere(`sampling-query-position-head-${frameOffset}`, {
+      diameter: 4.8,
+      segments: 12,
+    }, scene)
+    marker.position = futureAnchor
+    marker.material = anchorMaterial
+    marker.isPickable = false
+    meshes.push(marker)
+
+    const heading = normalizeSamplingVector(future.heading, vectorFromSamplingArray(samplingQuery.facing, new Vector3(0, 0, 1)))
+    const headingEnd = futureAnchor.add(heading.scale(16))
+    const headingLine = MeshBuilder.CreateLines(`sampling-query-direction-${frameOffset}`, {
+      points: [futureAnchor, headingEnd],
+    }, scene)
+    headingLine.color = new Color3(0.45, 0.92, 0.62)
+    headingLine.alpha = 0.88
+    headingLine.visibility = 0.88
+    headingLine.isPickable = false
+    meshes.push(headingLine)
+
+    const headingHead = MeshBuilder.CreateSphere(`sampling-query-direction-head-${frameOffset}`, {
+      diameter: 3.8,
+      segments: 10,
+    }, scene)
+    headingHead.position = headingEnd
+    headingHead.material = directionMaterial
+    headingHead.isPickable = false
+    meshes.push(headingHead)
+
+    meshes.push(createSamplingLabel(
+      scene,
+      `+${frameOffset}f`,
+      futureAnchor.add(new Vector3(0, 7, 0)),
+      `sampling-query-label-${frameOffset}`,
+    ))
+  }
+
+  return meshes
+}
+
+function getSamplingTimelinePlacement(query: SamplingQueryResponse, frame: number) {
+  const points = [
+    { frameOffset: 0, position: [0, 0, 0], direction: query.facing },
+    ...[...query.trajectory].sort((left, right) => left.frameOffset - right.frameOffset),
+  ]
+  const clampedFrame = Math.max(frame, 0)
+  const nextIndex = points.findIndex((point) => point.frameOffset >= clampedFrame)
+  const nextPoint = nextIndex >= 0 ? points[nextIndex] : points.at(-1)
+  const previousPoint = nextIndex > 0
+    ? points[nextIndex - 1]
+    : points[0]
+
+  if (!nextPoint || !previousPoint || nextPoint.frameOffset === previousPoint.frameOffset) {
+    return {
+      anchor: vectorFromSamplingArray(nextPoint?.position, Vector3.Zero()),
+      heading: getSamplingTimelineHeading(points, Math.max(nextIndex, 0), query.facing),
+    }
+  }
+
+  const ratio = Math.min(Math.max((clampedFrame - previousPoint.frameOffset) / (nextPoint.frameOffset - previousPoint.frameOffset), 0), 1)
+  return {
+    anchor: new Vector3(
+      lerpNumber(previousPoint.position[0] ?? 0, nextPoint.position[0] ?? 0, ratio),
+      0,
+      lerpNumber(previousPoint.position[2] ?? 0, nextPoint.position[2] ?? 0, ratio),
+    ),
+    heading: new Vector3(
+      (nextPoint.position[0] ?? 0) - (previousPoint.position[0] ?? 0),
+      0,
+      (nextPoint.position[2] ?? 0) - (previousPoint.position[2] ?? 0),
+    ),
+  }
+}
+
+function getSamplingTimelineHeading(
+  points: Array<{ frameOffset: number; position: number[]; direction: number[] }>,
+  index: number,
+  fallback: number[],
+) {
+  const previous = points[index - 1]
+  const current = points[index]
+  const next = points[index + 1]
+  if (current && next) {
+    return new Vector3(
+      (next.position[0] ?? 0) - (current.position[0] ?? 0),
+      0,
+      (next.position[2] ?? 0) - (current.position[2] ?? 0),
+    )
+  }
+
+  if (previous && current) {
+    return new Vector3(
+      (current.position[0] ?? 0) - (previous.position[0] ?? 0),
+      0,
+      (current.position[2] ?? 0) - (previous.position[2] ?? 0),
+    )
+  }
+
+  return vectorFromSamplingArray(fallback, new Vector3(0, 0, 1))
+}
+
+function normalizeSamplingVector(value: Vector3, fallback: Vector3) {
+  return value.lengthSquared() > 0.0001
+    ? value.normalize()
+    : fallback.lengthSquared() > 0.0001 ? fallback.normalize() : new Vector3(0, 0, 1)
+}
+
+function lerpNumber(start: number, end: number, ratio: number) {
+  return start + (end - start) * ratio
+}
+
+function findNearestSamplingTrajectoryPointIndex(
+  query: SamplingQueryResponse,
+  scene: Scene,
+  camera: ArcRotateCamera,
+  event: PointerEvent,
+) {
+  const canvas = scene.getEngine().getRenderingCanvas()
+  if (!canvas || !query.trajectory.length) {
+    return null
+  }
+
+  const bounds = canvas.getBoundingClientRect()
+  const renderWidth = scene.getEngine().getRenderWidth()
+  const renderHeight = scene.getEngine().getRenderHeight()
+  const pointerX = (event.clientX - bounds.left) * (renderWidth / Math.max(bounds.width, 1))
+  const pointerY = (event.clientY - bounds.top) * (renderHeight / Math.max(bounds.height, 1))
+  const viewport = camera.viewport.toGlobal(renderWidth, renderHeight)
+  const transform = scene.getTransformMatrix()
+  const hitRadiusPixels = 18
+
+  let bestIndex: number | null = null
+  let bestDistance = hitRadiusPixels
+  for (const [index, point] of query.trajectory.entries()) {
+    const worldPosition = vectorFromSamplingArray(point.position, Vector3.Zero()).add(new Vector3(0, 2, 0))
+    const projected = Vector3.Project(worldPosition, Matrix.Identity(), transform, viewport)
+    const distance = Math.hypot(projected.x - pointerX, projected.y - pointerY)
+    if (distance <= bestDistance) {
+      bestIndex = index
+      bestDistance = distance
+    }
+  }
+
+  return bestIndex
+}
+
+function findNearestSamplingTrajectorySegmentIndex(query: SamplingQueryResponse, pickedPoint: Vector3) {
+  if (!query.trajectory.length) {
+    return null
+  }
+
+  const picked = new Vector3(pickedPoint.x, 0, pickedPoint.z)
+  const points = [
+    Vector3.Zero(),
+    ...query.trajectory.map((point) => new Vector3(point.position[0] ?? 0, 0, point.position[2] ?? 0)),
+  ]
+  let bestIndex: number | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index]
+    const end = points[index + 1]
+    const segment = end.subtract(start)
+    const ratio = segment.lengthSquared() > 0.0001
+      ? Math.min(Math.max(Vector3.Dot(picked.subtract(start), segment) / segment.lengthSquared(), 0), 1)
+      : 0
+    const closestPoint = start.add(segment.scale(ratio))
+    const distance = Vector3.DistanceSquared(picked, closestPoint)
+    if (distance < bestDistance) {
+      bestIndex = index
+      bestDistance = distance
+    }
+  }
+
+  return bestIndex
+}
+
+function calculateSamplingSegmentSpeed(
+  fromFrame: number,
+  fromPosition: number[],
+  toFrame: number,
+  toPosition: number[],
+  samplingFrameRate: number,
+) {
+  const frameDelta = Math.max(toFrame - fromFrame, 1)
+  const seconds = frameDelta / Math.max(samplingFrameRate, 1)
+  const dx = (toPosition[0] ?? 0) - (fromPosition[0] ?? 0)
+  const dz = (toPosition[2] ?? 0) - (fromPosition[2] ?? 0)
+  return Math.hypot(dx, dz) / seconds
+}
+
+function formatSamplingSpeed(value: number) {
+  if (!Number.isFinite(value)) {
+    return '0'
+  }
+
+  return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1)
+}
+
+function insertSamplingTrajectoryPoint(trajectory: SamplingTrajectoryPoint[], afterIndex: number, facing: number[], samplingFrameRate: number) {
+  const sourcePoint = trajectory[afterIndex]
+  if (!sourcePoint) {
+    return trajectory
+  }
+
+  const insertedPoint = trajectory[afterIndex + 1]
+    ? midpointSamplingTrajectoryPoint(sourcePoint, trajectory[afterIndex + 1])
+    : extrapolateSamplingTrajectoryPoint(sourcePoint, trajectory[afterIndex - 1], facing, samplingFrameRate)
+
+  return [
+    ...trajectory.slice(0, afterIndex + 1),
+    insertedPoint,
+    ...trajectory.slice(afterIndex + 1),
+  ]
+}
+
+function insertSamplingTrajectoryPointOnSegment(trajectory: SamplingTrajectoryPoint[], segmentIndex: number, pickedPoint: Vector3) {
+  if (!trajectory.length) {
+    return trajectory
+  }
+
+  const previousPoint = segmentIndex === 0 ? null : trajectory[segmentIndex - 1]
+  const nextPoint = trajectory[segmentIndex]
+  if (!nextPoint) {
+    return trajectory
+  }
+
+  const startPosition = previousPoint?.position ?? [0, 0, 0]
+  const endPosition = nextPoint.position
+  const start = new Vector3(startPosition[0] ?? 0, 0, startPosition[2] ?? 0)
+  const end = new Vector3(endPosition[0] ?? 0, 0, endPosition[2] ?? 0)
+  const picked = new Vector3(pickedPoint.x, 0, pickedPoint.z)
+  const segment = end.subtract(start)
+  const ratio = segment.lengthSquared() > 0.0001
+    ? Math.min(Math.max(Vector3.Dot(picked.subtract(start), segment) / segment.lengthSquared(), 0.05), 0.95)
+    : 0.5
+  const projected = start.add(segment.scale(ratio))
+  const previousFrame = previousPoint?.frameOffset ?? 0
+  const frameDelta = nextPoint.frameOffset - previousFrame
+  const maxInsertFrame = frameDelta > 1 ? nextPoint.frameOffset - 1 : nextPoint.frameOffset
+  const frameOffset = Math.min(Math.max(Math.round(previousFrame + frameDelta * ratio), previousFrame + 1), maxInsertFrame)
+  const insertedPoint = {
+    frameOffset,
+    position: [
+      Number(projected.x.toFixed(2)),
+      0,
+      Number(projected.z.toFixed(2)),
+    ],
+    direction: previousPoint?.direction ?? nextPoint.direction,
+  }
+
+  return [
+    ...trajectory.slice(0, segmentIndex),
+    insertedPoint,
+    ...trajectory.slice(segmentIndex),
+  ]
+}
+
+function midpointSamplingTrajectoryPoint(current: SamplingTrajectoryPoint, next: SamplingTrajectoryPoint) {
+  return {
+    frameOffset: Math.max(Math.round((current.frameOffset + next.frameOffset) / 2), current.frameOffset + 1),
+    position: [
+      Number((((current.position[0] ?? 0) + (next.position[0] ?? 0)) * 0.5).toFixed(2)),
+      0,
+      Number((((current.position[2] ?? 0) + (next.position[2] ?? 0)) * 0.5).toFixed(2)),
+    ],
+    direction: current.direction,
+  }
+}
+
+function extrapolateSamplingTrajectoryPoint(
+  current: SamplingTrajectoryPoint,
+  previous: SamplingTrajectoryPoint | undefined,
+  facing: number[],
+  samplingFrameRate: number,
+) {
+  if (previous) {
+    const frameDelta = Math.max(current.frameOffset - previous.frameOffset, 1)
+    return {
+      frameOffset: current.frameOffset + frameDelta,
+      position: [
+        Number(((current.position[0] ?? 0) + ((current.position[0] ?? 0) - (previous.position[0] ?? 0))).toFixed(2)),
+        0,
+        Number(((current.position[2] ?? 0) + ((current.position[2] ?? 0) - (previous.position[2] ?? 0))).toFixed(2)),
+      ],
+      direction: current.direction,
+    }
+  }
+
+  const frameDelta = 20
+  const seconds = frameDelta / Math.max(samplingFrameRate, 1)
+  return {
+    frameOffset: current.frameOffset + frameDelta,
+    position: [
+      Number(((current.position[0] ?? 0) + (facing[0] ?? 0) * 100 * seconds).toFixed(2)),
+      0,
+      Number(((current.position[2] ?? 0) + (facing[2] ?? 1) * 100 * seconds).toFixed(2)),
+    ],
+    direction: current.direction,
+  }
 }
 
 function pickSamplingDragPoint(scene: Scene) {
@@ -956,12 +1626,13 @@ function createSamplingLabel(scene: Scene, text: string, position: Vector3, name
   return label
 }
 
-function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) {
+function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse, anchor: number[] | null, heading: number[] | null, alpha = 0.42, markerScale = 1) {
   const meshes: Mesh[] = []
   const material = new StandardMaterial('sampling-ghost-pose-material', scene)
   material.diffuseColor = new Color3(0.76, 0.9, 1)
   material.emissiveColor = new Color3(0.18, 0.38, 0.58)
-  material.alpha = 0.42
+  material.alpha = alpha
+  material.transparencyMode = Material.MATERIAL_ALPHABLEND
   material.disableDepthWrite = true
 
   const visibleBones = pose.bones
@@ -969,12 +1640,19 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
     .filter((bone) => !bone.boneName.toLowerCase().includes('end'))
     .slice(0, 72)
   const localBones = new Map(visibleBones.map((bone) => [normalizeGhostBoneName(bone.boneName), toGhostLocalBone(bone)]))
-  const bonePositions = anchorGhostPoseToSamplingOrigin(buildGhostBoneWorldPositions(localBones))
+  const anchorPosition = vectorFromSamplingArray(anchor ?? undefined, Vector3.Zero())
+  const headingDirection = normalizeGhostHeading(vectorFromSamplingArray(heading ?? undefined, new Vector3(0, 0, 1)))
+  const bonePositions = orientGhostPoseToHeading(
+    anchorGhostPoseToSamplingPosition(buildGhostBoneWorldPositions(localBones), anchorPosition),
+    anchorPosition,
+    headingDirection,
+  )
   const skeletonLines = buildGhostSkeletonLines(bonePositions)
   if (skeletonLines.length) {
     const skeleton = MeshBuilder.CreateLineSystem('sampling-ghost-pose-skeleton', { lines: skeletonLines }, scene)
     skeleton.color = new Color3(0.76, 0.9, 1)
-    skeleton.alpha = 0.52
+    skeleton.alpha = Math.min(alpha + 0.18, 0.98)
+    skeleton.visibility = Math.min(alpha + 0.18, 0.98)
     skeleton.isPickable = false
     meshes.push(skeleton)
   }
@@ -987,11 +1665,12 @@ function createSamplingGhostPose(scene: Scene, pose: RuntimePoseSampleResponse) 
     }
 
     const marker = MeshBuilder.CreateSphere(`sampling-ghost-pose-${index}`, {
-      diameter: isMainGhostBone(bone.boneName) ? 3.2 : 1.8,
+      diameter: (isMainGhostBone(bone.boneName) ? 3.2 : 1.8) * markerScale,
       segments: 8,
     }, scene)
     marker.position = position
     marker.material = material
+    marker.visibility = alpha
     marker.isPickable = false
     meshes.push(marker)
   }
@@ -1051,10 +1730,25 @@ function buildGhostBoneWorldPositions(localBones: Map<string, GhostLocalBone>) {
     : new Map([...localBones.entries()].map(([key, bone]) => [key, gltfPosePositionToViewport(bone.translation)]))
 }
 
-function anchorGhostPoseToSamplingOrigin(bonePositions: Map<string, Vector3>) {
+function anchorGhostPoseToSamplingPosition(bonePositions: Map<string, Vector3>, anchor: Vector3) {
   const hipsPosition = findGhostBonePosition(bonePositions, 'hips') ?? [...bonePositions.values()][0] ?? Vector3.Zero()
-  const offset = new Vector3(-hipsPosition.x, 0, -hipsPosition.z)
+  const offset = new Vector3(anchor.x - hipsPosition.x, anchor.y, anchor.z - hipsPosition.z)
   return new Map([...bonePositions.entries()].map(([key, position]) => [key, position.add(offset)]))
+}
+
+function orientGhostPoseToHeading(bonePositions: Map<string, Vector3>, anchor: Vector3, heading: Vector3) {
+  const yaw = Math.atan2(heading.x, heading.z) + Math.PI
+  const rotation = Matrix.RotationY(yaw)
+  return new Map([...bonePositions.entries()].map(([key, position]) => {
+    const relative = position.subtract(anchor)
+    const rotated = Vector3.TransformCoordinates(relative, rotation).add(anchor)
+    return [key, rotated]
+  }))
+}
+
+function normalizeGhostHeading(heading: Vector3) {
+  const flat = new Vector3(heading.x, 0, heading.z)
+  return flat.lengthSquared() > 0.0001 ? flat.normalize() : new Vector3(0, 0, 1)
 }
 
 function buildGhostSkeletonLines(bonePositions: Map<string, Vector3>) {

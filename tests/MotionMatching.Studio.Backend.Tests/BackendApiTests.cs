@@ -535,7 +535,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"name\":\"trajectory_position\"", draftJson);
         Assert.Contains("\"scale\"", draftJson);
         Assert.Contains("\"mode\":\"source_x0_01\"", draftJson);
-        Assert.Contains("\"trajectory_position_20\"", draftJson);
+        Assert.Contains("\"trajectory_position_20f\"", draftJson);
         Assert.Contains("\"samplePreviews\"", draftJson);
 
         var draftPath = Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "runtime-build-draft.json");
@@ -550,7 +550,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.True(File.Exists(databasePath));
 
         var persistedDraftJson = await File.ReadAllTextAsync(draftPath);
-        Assert.Contains("\"trajectory_position[20,40,60]:simulation_bone\"", persistedDraftJson);
+        Assert.Contains("\"trajectory_position[10,20,30]:simulation_bone\"", persistedDraftJson);
         Assert.Contains("\"status\": \"draft\"", persistedDraftJson);
         Assert.DoesNotContain(_workspaceRoot, persistedDraftJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedDraftJson);
@@ -571,18 +571,35 @@ public sealed class BackendApiTests : IAsyncLifetime
         Assert.Contains("\"boneSlot\": \"simulation_bone\"", persistedFeatureJson);
         Assert.Contains("\"sampleFrameStep\": 2", persistedFeatureJson);
         Assert.Contains("\"normalizationFactor\": 0.01", persistedFeatureJson);
+        Assert.Contains("\"trajectoryTimesSeconds\": [", persistedFeatureJson);
         Assert.Contains("\"values\": {", persistedFeatureJson);
-        Assert.Contains("\"trajectory_direction_60\"", persistedFeatureJson);
+        Assert.Contains("\"trajectory_direction_30f\"", persistedFeatureJson);
         Assert.DoesNotContain(_workspaceRoot, persistedFeatureJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedFeatureJson);
         var persistedDatabaseJson = await File.ReadAllTextAsync(databasePath);
         Assert.Contains("\"schemaVersion\": \"motionstudio.runtime-database-draft.v0\"", persistedDatabaseJson);
         Assert.Contains("\"id\": \"motionstudio.runtime-database\"", persistedDatabaseJson);
         Assert.Contains("\"poseSamples\":", persistedDatabaseJson);
+        Assert.Contains("\"frameRate\": 30", persistedDatabaseJson);
         Assert.Contains("\"clipName\": \"RunForward\"", persistedDatabaseJson);
         Assert.Contains("\"samples\": [", persistedDatabaseJson);
         Assert.Contains("\"frame\": 40", persistedDatabaseJson);
         Assert.Contains("\"features\": {", persistedDatabaseJson);
+        using (var persistedDatabaseDocument = JsonDocument.Parse(persistedDatabaseJson))
+        {
+            var databaseClip = persistedDatabaseDocument.RootElement
+                .GetProperty("clips")
+                .EnumerateArray()
+                .First(clip => clip.GetProperty("clipName").GetString() == "RunForward");
+            Assert.InRange(databaseClip.GetProperty("frameRate").GetDouble(), 29.999, 30.001);
+            Assert.InRange(databaseClip.GetProperty("durationSeconds").GetDouble(), 1.3999, 1.4001);
+
+            var frame40Sample = persistedDatabaseDocument.RootElement
+                .GetProperty("samples")
+                .EnumerateArray()
+                .First(sample => sample.GetProperty("frame").GetInt32() == 40);
+            Assert.InRange(frame40Sample.GetProperty("seconds").GetDouble(), 1.3332, 1.3335);
+        }
         Assert.DoesNotContain(_workspaceRoot, persistedDatabaseJson);
         Assert.DoesNotContain(Path.GetTempPath(), persistedDatabaseJson);
         Assert.True(File.Exists(Path.Combine(_workspaceRoot, "Builds", "IyoMixamo", "build-report.json")));
@@ -592,7 +609,7 @@ public sealed class BackendApiTests : IAsyncLifetime
         workspaceResponse.EnsureSuccessStatusCode();
         Assert.Contains("\"runtimeBuildDraftPath\":\"Builds/IyoMixamo/runtime-build-draft.json\"", workspaceJson);
         Assert.Contains("\"runtimeBuildDraftStatus\":\"current\"", workspaceJson);
-        Assert.Contains("\"runtimeBuildSettings\":{\"sampleFrameStep\":2,\"scaleMode\":\"source_x0_01\"}", workspaceJson);
+        Assert.Contains("\"runtimeBuildSettings\":{\"sampleFrameStep\":2,\"scaleMode\":\"source_x0_01\",\"trajectoryPredictionFrames\":[10,20,30]}", workspaceJson);
 
         var loadedDraftResponse = await client.GetAsync($"/api/v1/workspaces/browser/characters/{characterId}/runtime-build-draft");
         var loadedDraftJson = await loadedDraftResponse.Content.ReadAsStringAsync();

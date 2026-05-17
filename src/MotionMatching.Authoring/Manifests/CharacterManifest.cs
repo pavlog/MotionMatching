@@ -65,4 +65,6 @@ public sealed record RuntimeBuildSettings
     public int SampleFrameStep { get; init; } = 1;
 
     public string ScaleMode { get; init; } = "auto";
+
+    public int[] TrajectoryPredictionFrames { get; init; } = [10, 20, 30];
 }

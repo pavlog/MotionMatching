@@ -299,11 +299,13 @@ export type RuntimeScaleMode = 'auto' | 'source_x0_01' | 'character_x1'
 export interface RuntimeBuildSettingsResponse {
   sampleFrameStep: number
   scaleMode: RuntimeScaleMode
+  trajectoryPredictionFrames: number[]
 }
 
 export interface RuntimeBuildSettingsRequest {
   sampleFrameStep: number
   scaleMode: RuntimeScaleMode
+  trajectoryPredictionFrames: number[]
 }
 
 export interface RuntimeFeatureChannelResponse {
@@ -311,6 +313,7 @@ export interface RuntimeFeatureChannelResponse {
   kind: string
   boneSlot: string | null
   trajectoryFrames: number[]
+  trajectoryTimesSeconds?: number[]
 }
 
 export interface RuntimeFeatureClipResponse {
@@ -356,6 +359,9 @@ export interface RuntimeDatabaseClipResponse {
   clipName: string
   clipRole: string | null
   isMirrored: boolean
+  frameCount: number | null
+  frameRate: number | null
+  durationSeconds: number | null
   plannedSampleCount: number
   footContacts: RuntimeDatabaseContactTrackResponse[]
 }

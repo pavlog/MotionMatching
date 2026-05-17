@@ -14,10 +14,10 @@ namespace MotionMatching.Studio.Backend.Workspaces;
 public sealed class BrowserWorkspaceService
 {
     private const string WorkspaceFileName = "workspace.json";
-    private static readonly string[] RuntimeDraftFeaturePreset =
+    private const int RuntimeSamplingFrameRate = 30;
+    private static readonly int[] DefaultTrajectoryPredictionFrames = [10, 20, 30];
+    private static readonly string[] RuntimeDraftBaseFeaturePreset =
     [
-        "trajectory_position[20,40,60]:simulation_bone",
-        "trajectory_direction[20,40,60]:simulation_bone",
         "left_foot_position",
         "left_foot_velocity",
         "right_foot_position",
@@ -555,12 +555,14 @@ public sealed class BrowserWorkspaceService
         var (characterManifestPath, manifest) = await ReadCharacterManifestAsync(reference, cancellationToken);
         var normalizedSampleFrameStep = Math.Clamp(sampleFrameStep ?? manifest.RuntimeBuildSettings.SampleFrameStep, 1, 120);
         var normalizedScaleMode = NormalizeRuntimeScaleMode(scaleMode ?? manifest.RuntimeBuildSettings.ScaleMode);
+        var normalizedTrajectoryPredictionFrames = NormalizeTrajectoryPredictionFrames(manifest.RuntimeBuildSettings.TrajectoryPredictionFrames);
         var runtimeBuildSettings = new RuntimeBuildSettings
         {
             SampleFrameStep = normalizedSampleFrameStep,
-            ScaleMode = normalizedScaleMode
+            ScaleMode = normalizedScaleMode,
+            TrajectoryPredictionFrames = normalizedTrajectoryPredictionFrames
         };
-        if (manifest.RuntimeBuildSettings != runtimeBuildSettings)
+        if (!RuntimeBuildSettingsEqual(manifest.RuntimeBuildSettings, runtimeBuildSettings))
         {
             await WriteManifestAsync(characterManifestPath, manifest with { RuntimeBuildSettings = runtimeBuildSettings }, cancellationToken);
         }
@@ -572,7 +574,8 @@ public sealed class BrowserWorkspaceService
         var skeletonDraft = await BuildRuntimeSkeletonDraftAsync(reference, cancellationToken);
         var character = await ToCharacterResponseAsync(reference, cancellationToken);
         var poseDraft = BuildRuntimePoseDraft(report.BuildReadiness, character.Clips, normalizedSampleFrameStep, skeletonDraft, characterRoot);
-        var featureDraft = BuildRuntimeFeatureDraft(RuntimeDraftFeaturePreset, poseDraft, character.Clips, normalizedScaleMode);
+        var runtimeDraftFeaturePreset = BuildRuntimeDraftFeaturePreset(normalizedTrajectoryPredictionFrames);
+        var featureDraft = BuildRuntimeFeatureDraft(runtimeDraftFeaturePreset, poseDraft, character.Clips, normalizedScaleMode);
         var databaseDraft = BuildRuntimeDatabaseDraft(poseDraft, featureDraft, character.Clips);
         var draft = new RuntimeBuildDraftResponse(
             report.CharacterId,
@@ -581,7 +584,7 @@ public sealed class BrowserWorkspaceService
             DateTimeOffset.UtcNow,
             report.ReportPath,
             normalizedSampleFrameStep,
-            RuntimeDraftFeaturePreset,
+            runtimeDraftFeaturePreset,
             [
                 new RuntimeBuildArtifactResponse($"{characterFolderName}.mmskeleton", "skeleton", skeletonDraft.Status == "error" ? "blocked" : "draft"),
                 new RuntimeBuildArtifactResponse($"{characterFolderName}.mmpose", "poses", poseDraft.Status == "error" ? "blocked" : "draft"),
@@ -708,7 +711,8 @@ public sealed class BrowserWorkspaceService
         var settings = new RuntimeBuildSettings
         {
             SampleFrameStep = Math.Clamp(request.SampleFrameStep, 1, 120),
-            ScaleMode = NormalizeRuntimeScaleMode(request.ScaleMode)
+            ScaleMode = NormalizeRuntimeScaleMode(request.ScaleMode),
+            TrajectoryPredictionFrames = NormalizeTrajectoryPredictionFrames(request.TrajectoryPredictionFrames)
         };
 
         await WriteManifestAsync(characterManifestPath, manifest with { RuntimeBuildSettings = settings }, cancellationToken);
@@ -1529,6 +1533,9 @@ public sealed class BrowserWorkspaceService
                     clip.ClipName,
                     clip.ClipRole,
                     clip.IsMirrored,
+                    sourceClip?.FrameCount,
+                    sourceClip?.FrameRate,
+                    sourceClip?.DurationSeconds,
                     clip.PlannedSampleCount,
                     footContacts);
             })
@@ -1759,7 +1766,7 @@ public sealed class BrowserWorkspaceService
             {
                 foreach (var futureFrame in channel.TrajectoryFrames)
                 {
-                    values[$"{channel.Name}_{futureFrame}"] = EstimateFeatureValue(
+                    values[BuildTrajectoryFeatureValueName(channel.Name, futureFrame)] = EstimateFeatureValue(
                         channel,
                         sourceClip,
                         frame,
@@ -1787,6 +1794,11 @@ public sealed class BrowserWorkspaceService
             frame,
             seconds,
             values);
+    }
+
+    private static string BuildTrajectoryFeatureValueName(string channelName, int frameOffset)
+    {
+        return $"{channelName}_{frameOffset}f";
     }
 
     private static double ToSampleSeconds(ClipResponse? clip, int frame)
@@ -1853,8 +1865,7 @@ public sealed class BrowserWorkspaceService
             return null;
         }
 
-        var frameRate = clip.FrameRate is > 0 ? clip.FrameRate.Value : 30;
-        var futureSeconds = futureFrameOffset / frameRate;
+        var futureSeconds = futureFrameOffset / (double)RuntimeSamplingFrameRate;
         var speed = clip.RootMotion.AverageHorizontalSpeed * normalizationFactor;
         if (channel.Name.Equals("trajectory_direction", StringComparison.OrdinalIgnoreCase))
         {
@@ -1911,7 +1922,10 @@ public sealed class BrowserWorkspaceService
             : name.Contains("velocity", StringComparison.OrdinalIgnoreCase)
                 ? "velocity"
                 : "position";
-        return new RuntimeFeatureChannelResponse(name, kind, boneSlot, trajectoryFrames);
+        var trajectoryTimesSeconds = trajectoryFrames
+            .Select(frame => Math.Round(frame / (double)RuntimeSamplingFrameRate, 4))
+            .ToArray();
+        return new RuntimeFeatureChannelResponse(name, kind, boneSlot, trajectoryFrames, trajectoryTimesSeconds);
     }
 
     private static string ComputeReadinessFingerprint(BuildReadinessResponse buildReadiness)
@@ -2656,7 +2670,36 @@ public sealed class BrowserWorkspaceService
     {
         return new RuntimeBuildSettingsResponse(
             Math.Clamp(settings.SampleFrameStep, 1, 120),
-            NormalizeRuntimeScaleMode(settings.ScaleMode));
+            NormalizeRuntimeScaleMode(settings.ScaleMode),
+            NormalizeTrajectoryPredictionFrames(settings.TrajectoryPredictionFrames));
+    }
+
+    private static string[] BuildRuntimeDraftFeaturePreset(IReadOnlyList<int> trajectoryPredictionFrames)
+    {
+        var frameText = string.Join(",", NormalizeTrajectoryPredictionFrames(trajectoryPredictionFrames));
+        return
+        [
+            $"trajectory_position[{frameText}]:simulation_bone",
+            $"trajectory_direction[{frameText}]:simulation_bone",
+            ..RuntimeDraftBaseFeaturePreset
+        ];
+    }
+
+    private static int[] NormalizeTrajectoryPredictionFrames(IReadOnlyList<int>? frames)
+    {
+        var normalized = (frames is { Count: > 0 } ? frames : DefaultTrajectoryPredictionFrames)
+            .Select(frame => Math.Clamp(frame, 1, 600))
+            .Distinct()
+            .Order()
+            .ToArray();
+        return normalized.Length > 0 ? normalized : DefaultTrajectoryPredictionFrames;
+    }
+
+    private static bool RuntimeBuildSettingsEqual(RuntimeBuildSettings left, RuntimeBuildSettings right)
+    {
+        return Math.Clamp(left.SampleFrameStep, 1, 120) == Math.Clamp(right.SampleFrameStep, 1, 120) &&
+               NormalizeRuntimeScaleMode(left.ScaleMode) == NormalizeRuntimeScaleMode(right.ScaleMode) &&
+               NormalizeTrajectoryPredictionFrames(left.TrajectoryPredictionFrames).SequenceEqual(NormalizeTrajectoryPredictionFrames(right.TrajectoryPredictionFrames));
     }
 
     private sealed record ClipSkeletonValidationResult(

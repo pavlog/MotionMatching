@@ -191,7 +191,8 @@ public sealed record RuntimeBuildExportResponse(
 
 public sealed record RuntimeBuildSettingsResponse(
     int SampleFrameStep,
-    string ScaleMode);
+    string ScaleMode,
+    IReadOnlyList<int> TrajectoryPredictionFrames);
 
 public sealed record RuntimeSkeletonDraftResponse(
     string Status,
@@ -262,7 +263,8 @@ public sealed record RuntimeFeatureChannelResponse(
     string Name,
     string Kind,
     string? BoneSlot,
-    IReadOnlyList<int> TrajectoryFrames);
+    IReadOnlyList<int> TrajectoryFrames,
+    IReadOnlyList<double> TrajectoryTimesSeconds);
 
 public sealed record RuntimeFeatureClipResponse(
     string ClipId,
@@ -303,6 +305,9 @@ public sealed record RuntimeDatabaseClipResponse(
     string ClipName,
     string? ClipRole,
     bool IsMirrored,
+    int? FrameCount,
+    double? FrameRate,
+    double? DurationSeconds,
     int PlannedSampleCount,
     IReadOnlyList<RuntimeDatabaseContactTrackResponse> FootContacts);
 
@@ -358,4 +363,5 @@ public sealed record SamplingTrajectoryPointUpdateRequest(
 
 public sealed record RuntimeBuildSettingsRequest(
     int SampleFrameStep,
-    string? ScaleMode);
+    string? ScaleMode,
+    IReadOnlyList<int>? TrajectoryPredictionFrames);

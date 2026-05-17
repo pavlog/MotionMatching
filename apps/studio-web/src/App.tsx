@@ -7,6 +7,8 @@ import {
   type ContactDetectionPreset,
   type RuntimeDatabaseDraftResponse,
   type RuntimeBuildDraftResponse,
+  type RuntimeFeatureChannelResponse,
+  type RuntimePoseSampleResponse,
   type RuntimeScaleMode,
   type SamplingQueryResponse,
   type SamplingQueryUpdateRequest,
@@ -31,7 +33,7 @@ import {
   uploadClip,
   uploadVisualCharacter,
 } from './api'
-import { BabylonViewport } from './BabylonViewport'
+import { BabylonViewport, type SamplingGhostPosePreview } from './BabylonViewport'
 import './App.css'
 
 interface LogEntry {
@@ -80,10 +82,14 @@ type TextViewer = {
 }
 
 const fallbackFrameCount = 120
-const fallbackFrameRate = 24
+const defaultSamplingFrameRate = 30
+const fallbackFrameRate = defaultSamplingFrameRate
 type ClipMotionMode = 'inPlace' | 'rootMotion'
 type CharacterInspectorTab = 'overview' | 'sampling'
+type SamplingGhostingMode = 'none' | 'every10' | 'every5' | 'every2' | 'every1' | 'window5'
 type SamplingMatcherPreviewMatch = {
+  pointIndex: number
+  pointFrame: number
   clipId: string
   clipName: string
   isMirrored: boolean
@@ -102,6 +108,14 @@ type SamplingMatcherPreviewMatch = {
     other: number
   }
   matchedFeatureCount: number
+}
+type RuntimeQueryContractFeature = {
+  name: string
+  sourceChannel: string
+  kind: string
+  boneSlot: string | null
+  trajectoryFrame: number | null
+  timeSeconds: number | null
 }
 
 const clipRoles = [
@@ -143,6 +157,9 @@ function App() {
   const [selection, setSelection] = useState<Selection | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const [timelineFrame, setTimelineFrame] = useState(0)
+  const [samplingPreviewFrame, setSamplingPreviewFrame] = useState(0)
+  const [samplingGhostingMode, setSamplingGhostingMode] = useState<SamplingGhostingMode>('none')
+  const [showSamplingQueryVectors, setShowSamplingQueryVectors] = useState(false)
   const [loopStartFrame, setLoopStartFrame] = useState(0)
   const [loopEndFrame, setLoopEndFrame] = useState(-1)
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false)
@@ -189,17 +206,42 @@ function App() {
   const savedVisibleSampling = selectedSampling ?? selectedCharacter?.samplings[0] ?? null
   const visibleSampling = savedVisibleSampling ? samplingDrafts[savedVisibleSampling.id] ?? savedVisibleSampling : null
   const isSamplingPreviewActive = Boolean(selectedCharacter && !selectedClip && characterInspectorTab === 'sampling')
-  const selectedSamplingGhostPose = useMemo(() => {
-    if (!selectedSamplingMatch || !lastRuntimeDraft || lastRuntimeDraft.characterId !== selectedCharacter?.id) {
-      return null
+  const samplingPreviewFrameCount = visibleSampling ? getSamplingPreviewFrameCount(visibleSampling) : 1
+  const maxSamplingPreviewFrame = Math.max(samplingPreviewFrameCount - 1, 0)
+  const visibleSamplingPreviewFrame = Math.min(samplingPreviewFrame, maxSamplingPreviewFrame)
+  const hasSamplingTimeline = Boolean(isSamplingPreviewActive && visibleSampling)
+  const samplingMatcherPreview = useMemo(
+    () => visibleSampling && lastRuntimeDraft && lastRuntimeDraft.characterId === selectedCharacter?.id
+      ? buildSamplingMatcherPreview(visibleSampling, lastRuntimeDraft.database)
+      : [],
+    [lastRuntimeDraft, selectedCharacter?.id, visibleSampling],
+  )
+  const activeSamplingPreviewMatch = selectedSamplingMatch ?? samplingMatcherPreview[0] ?? null
+  const hasSamplingPreviewTimeline = Boolean(hasSamplingTimeline && activeSamplingPreviewMatch)
+  const hasBottomTimeline = Boolean(selectedClip || hasSamplingTimeline)
+  const samplingQueryVectorFrames = useMemo(() => {
+    const runtimeDraft = lastRuntimeDraft
+    const runtimeFrames = runtimeDraft && runtimeDraft.characterId === selectedCharacter?.id
+      ? runtimeDraft.features.channels.flatMap((channel) => channel.trajectoryFrames)
+      : []
+    const frames = runtimeFrames.length ? runtimeFrames : visibleSampling?.trajectory.map((point) => point.frameOffset) ?? []
+    return [...new Set(frames)]
+      .filter((frame) => Number.isFinite(frame) && frame > 0)
+      .sort((left, right) => left - right)
+  }, [lastRuntimeDraft, selectedCharacter?.id, visibleSampling])
+  const selectedSamplingGhostPoses = useMemo(() => {
+    if (!activeSamplingPreviewMatch || !lastRuntimeDraft || lastRuntimeDraft.characterId !== selectedCharacter?.id || !visibleSampling) {
+      return []
     }
 
-    return lastRuntimeDraft.database.poseSamples.find((sample) => (
-      sample.clipId === selectedSamplingMatch.clipId &&
-      sample.isMirrored === selectedSamplingMatch.isMirrored &&
-      sample.frame === selectedSamplingMatch.frame
-    )) ?? null
-  }, [lastRuntimeDraft, selectedCharacter?.id, selectedSamplingMatch])
+    return buildSamplingGhostPosePreviews(
+      lastRuntimeDraft.database.poseSamples,
+      activeSamplingPreviewMatch,
+      visibleSampling,
+      visibleSamplingPreviewFrame,
+      samplingGhostingMode,
+    )
+  }, [activeSamplingPreviewMatch, lastRuntimeDraft, samplingGhostingMode, selectedCharacter?.id, visibleSampling, visibleSamplingPreviewFrame])
 
   useEffect(() => {
     timelineFrameRef.current = visibleTimelineFrame
@@ -236,10 +278,20 @@ function App() {
     setIsTimelinePlaying(false)
   }, [maxTimelineFrame])
 
+  const seekSamplingTimeline = useCallback((frame: number) => {
+    setSamplingPreviewFrame(Math.min(Math.max(frame, 0), maxSamplingPreviewFrame))
+    setIsTimelinePlaying(false)
+  }, [maxSamplingPreviewFrame])
+
   const stepTimeline = useCallback((delta: number) => {
     setIsTimelinePlaying(false)
     setTimelineFrame((current) => Math.min(Math.max(current + delta, 0), maxTimelineFrame))
   }, [maxTimelineFrame])
+
+  const stepSamplingTimeline = useCallback((delta: number) => {
+    setIsTimelinePlaying(false)
+    setSamplingPreviewFrame((current) => Math.min(Math.max(current + delta, 0), maxSamplingPreviewFrame))
+  }, [maxSamplingPreviewFrame])
 
   const resetTimeline = useCallback(() => {
     setTimelineFrame(0)
@@ -268,12 +320,14 @@ function App() {
   }, [resetTimeline])
 
   const selectMatcherSample = useCallback((characterId: string, match: SamplingMatcherPreviewMatch) => {
+    setSamplingPreviewFrame(match.pointFrame)
     selectClipFrame(characterId, match.clipId, match.frame)
     appendLog(`Opened matcher result ${match.clipName} F${match.frame + 1}${match.isMirrored ? ' (mirrored source)' : ''}`)
   }, [appendLog, selectClipFrame])
 
   const previewMatcherSample = useCallback((match: SamplingMatcherPreviewMatch) => {
     setSelectedSamplingMatch(match)
+    setSamplingPreviewFrame(match.pointFrame)
     appendLog(`Previewing matcher ghost ${match.clipName} F${match.frame + 1}${match.isMirrored ? ' Mirror' : ''}`)
   }, [appendLog])
 
@@ -355,8 +409,29 @@ function App() {
   }, [isTimelinePlaying, maxTimelineFrame, selectedClip, timelineFrameRate, visibleLoopEndFrame, visibleLoopStartFrame])
 
   useEffect(() => {
+    if (!isTimelinePlaying || !hasSamplingPreviewTimeline || maxSamplingPreviewFrame <= 0) {
+      return
+    }
+
+    const startFrame = Math.min(Math.max(visibleSamplingPreviewFrame, 0), maxSamplingPreviewFrame)
+    const startTime = performance.now()
+    let animationFrame = 0
+
+    const advance = (now: number) => {
+      const elapsedSeconds = (now - startTime) / 1000
+      const elapsedFrames = Math.floor(elapsedSeconds * fallbackFrameRate)
+      const nextFrame = (startFrame + elapsedFrames) % (maxSamplingPreviewFrame + 1)
+      setSamplingPreviewFrame(nextFrame)
+      animationFrame = window.requestAnimationFrame(advance)
+    }
+
+    animationFrame = window.requestAnimationFrame(advance)
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [hasSamplingPreviewTimeline, isTimelinePlaying, maxSamplingPreviewFrame, visibleSamplingPreviewFrame])
+
+  useEffect(() => {
     const handleTimelineKeys = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || !selectedClip) {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || (!selectedClip && !hasSamplingPreviewTimeline)) {
         return
       }
 
@@ -365,26 +440,42 @@ function App() {
         event.preventDefault()
       }
       if (event.key.toLowerCase() === 'q' || event.key === 'ArrowLeft') {
-        stepTimeline(event.shiftKey ? -10 : -1)
+        if (selectedClip) {
+          stepTimeline(event.shiftKey ? -10 : -1)
+        } else {
+          stepSamplingTimeline(event.shiftKey ? -10 : -1)
+        }
         event.preventDefault()
       }
       if (event.key.toLowerCase() === 'e' || event.key === 'ArrowRight') {
-        stepTimeline(event.shiftKey ? 10 : 1)
+        if (selectedClip) {
+          stepTimeline(event.shiftKey ? 10 : 1)
+        } else {
+          stepSamplingTimeline(event.shiftKey ? 10 : 1)
+        }
         event.preventDefault()
       }
       if (event.key === 'Home') {
-        setTimelineFrame(0)
+        if (selectedClip) {
+          setTimelineFrame(0)
+        } else {
+          setSamplingPreviewFrame(0)
+        }
         event.preventDefault()
       }
       if (event.key === 'End') {
-        setTimelineFrame(maxTimelineFrame)
+        if (selectedClip) {
+          setTimelineFrame(maxTimelineFrame)
+        } else {
+          setSamplingPreviewFrame(maxSamplingPreviewFrame)
+        }
         event.preventDefault()
       }
     }
 
     window.addEventListener('keydown', handleTimelineKeys)
     return () => window.removeEventListener('keydown', handleTimelineKeys)
-  }, [maxTimelineFrame, selectedClip, stepTimeline])
+  }, [hasSamplingPreviewTimeline, maxSamplingPreviewFrame, maxTimelineFrame, selectedClip, stepSamplingTimeline, stepTimeline])
 
   useEffect(() => {
     if (!clipContextMenu && !characterContextMenu && !samplingContextMenu) {
@@ -748,9 +839,10 @@ function App() {
   }
 
   function handleSamplingDraftChange(query: SamplingQueryResponse) {
+    const normalizedQuery = normalizeSamplingDraftVelocity(query)
     setSamplingDrafts((current) => ({
       ...current,
-      [query.id]: query,
+      [normalizedQuery.id]: normalizedQuery,
     }))
   }
 
@@ -785,7 +877,7 @@ function App() {
     }
   }
 
-  async function handleUpdateRuntimeBuildSettings(settings: Partial<{ sampleFrameStep: number; scaleMode: RuntimeScaleMode }>) {
+  async function handleUpdateRuntimeBuildSettings(settings: Partial<{ sampleFrameStep: number; scaleMode: RuntimeScaleMode; trajectoryPredictionFrames: number[] }>) {
     if (!selectedCharacter) {
       return
     }
@@ -793,6 +885,7 @@ function App() {
     const nextSettings = {
       sampleFrameStep: settings.sampleFrameStep ?? selectedCharacter.runtimeBuildSettings.sampleFrameStep,
       scaleMode: settings.scaleMode ?? selectedCharacter.runtimeBuildSettings.scaleMode,
+      trajectoryPredictionFrames: settings.trajectoryPredictionFrames ?? selectedCharacter.runtimeBuildSettings.trajectoryPredictionFrames,
     }
 
     try {
@@ -879,9 +972,9 @@ function App() {
   }
 
   async function handleGenerateRuntimeBuildDraft(character: CharacterResponse) {
-    const { sampleFrameStep, scaleMode } = character.runtimeBuildSettings
+    const { sampleFrameStep, scaleMode, trajectoryPredictionFrames } = character.runtimeBuildSettings
     setIsBusy(true)
-    appendLog(`Building runtime draft for ${character.name} at step ${sampleFrameStep}, scale ${scaleMode}`)
+    appendLog(`Building runtime draft for ${character.name} at step ${sampleFrameStep}, scale ${scaleMode}, trajectory +${trajectoryPredictionFrames.join('/')}f @${defaultSamplingFrameRate}`)
     try {
       const draft = await generateRuntimeBuildDraft(character.id, sampleFrameStep, scaleMode)
       setLastRuntimeDraft(draft)
@@ -1166,7 +1259,11 @@ function App() {
           clipMotionMode={clipMotionMode}
           samplingPreview={isSamplingPreviewActive}
           samplingQuery={visibleSampling}
-          samplingGhostPose={isSamplingPreviewActive ? selectedSamplingGhostPose : null}
+          samplingFrameRate={defaultSamplingFrameRate}
+          samplingGhostPoses={isSamplingPreviewActive ? selectedSamplingGhostPoses : []}
+          samplingPreviewFrame={visibleSamplingPreviewFrame}
+          samplingQueryVectorFrames={samplingQueryVectorFrames}
+          showSamplingQueryVectors={isSamplingPreviewActive && showSamplingQueryVectors}
           label={selectedClip ? `${selectedCharacter?.name ?? 'Character'} / ${selectedClip.name}` : selectedCharacter?.name ?? 'Empty scene'}
           onClipMotionModeChange={setClipMotionMode}
           onAnimationStateChange={setAnimationPreviewState}
@@ -1202,6 +1299,7 @@ function App() {
             selectedSamplingDraft={visibleSampling}
             runtimeSampleFrameStep={selectedCharacter.runtimeBuildSettings.sampleFrameStep}
             runtimeScaleMode={selectedCharacter.runtimeBuildSettings.scaleMode}
+            runtimeTrajectoryPredictionFrames={selectedCharacter.runtimeBuildSettings.trajectoryPredictionFrames}
             activeTab={characterInspectorTab}
             runtimeSettingsSaveState={visibleRuntimeSettingsSaveState}
             hasBuildReport={Boolean((lastBuildReport?.characterId === selectedCharacter.id && lastBuildReport) || selectedCharacter.buildReportPath)}
@@ -1219,6 +1317,7 @@ function App() {
             onUpdateSampling={(samplingId, update) => handleUpdateSampling(selectedCharacter.id, samplingId, update)}
             onRuntimeSampleFrameStepChange={(sampleFrameStep) => handleUpdateRuntimeBuildSettings({ sampleFrameStep })}
             onRuntimeScaleModeChange={(scaleMode) => handleUpdateRuntimeBuildSettings({ scaleMode })}
+            onRuntimeTrajectoryPredictionFramesChange={(trajectoryPredictionFrames) => handleUpdateRuntimeBuildSettings({ trajectoryPredictionFrames })}
             onSelectClip={(clipId) => selectClip(selectedCharacter.id, clipId)}
             selectedMatcherKey={selectedSamplingMatch ? samplingMatcherPreviewKey(selectedSamplingMatch) : null}
             onPreviewMatcherSample={previewMatcherSample}
@@ -1231,15 +1330,17 @@ function App() {
         )}
       </aside>
 
-      <section className={`bottom-panel ${selectedClip ? 'has-timeline' : 'log-only'}`} aria-label="Timeline and logs">
+      <section className={`bottom-panel ${hasBottomTimeline ? 'has-timeline' : 'log-only'}`} aria-label="Timeline and logs">
         {selectedClip ? (
           <TimelinePanel
             clip={selectedClip}
+            title={selectedClip.name}
             frame={visibleTimelineFrame}
             frameCount={timelineFrameCount}
             frameRate={timelineFrameRate}
             durationSeconds={selectedClip.durationSeconds}
             hasMetadata={hasClipTimelineMetadata}
+            isEnabled
             isPlaying={isTimelinePlaying}
             footContacts={selectedClip.footContacts}
             onTogglePlay={() => selectedClip && setIsTimelinePlaying((current) => !current)}
@@ -1255,6 +1356,32 @@ function App() {
               const nextEnd = Math.max(Math.min(frame, maxTimelineFrame), visibleLoopStartFrame)
               setLoopEndFrame(nextEnd)
             }}
+          />
+        ) : hasSamplingTimeline ? (
+          <TimelinePanel
+            clip={null}
+            title={hasSamplingPreviewTimeline ? `Sampling: ${activeSamplingPreviewMatch?.clipName ?? 'match'}` : 'Sampling: load samples'}
+            frame={visibleSamplingPreviewFrame}
+            frameCount={samplingPreviewFrameCount}
+            frameRate={fallbackFrameRate}
+            durationSeconds={samplingPreviewFrameCount / fallbackFrameRate}
+            hasMetadata
+            isEnabled={hasSamplingPreviewTimeline}
+            isPlaying={isTimelinePlaying && hasSamplingPreviewTimeline}
+            footContacts={null}
+            markerFrames={visibleSampling?.trajectory.map((point) => point.frameOffset) ?? []}
+            ghostingMode={samplingGhostingMode}
+            onGhostingModeChange={setSamplingGhostingMode}
+            showQueryVectors={showSamplingQueryVectors}
+            onShowQueryVectorsChange={setShowSamplingQueryVectors}
+            onTogglePlay={() => hasSamplingPreviewTimeline && setIsTimelinePlaying((current) => !current)}
+            onStep={stepSamplingTimeline}
+            onSeek={seekSamplingTimeline}
+            loopStartFrame={0}
+            loopEndFrame={maxSamplingPreviewFrame}
+            onSetLoopStart={() => undefined}
+            onSetLoopEnd={() => undefined}
+            showLoopControls={false}
           />
         ) : null}
         <button type="button" className="log-strip" onClick={openLogViewer} title="Open log">
@@ -1546,6 +1673,7 @@ function RuntimeDraftView({
 }) {
   const readiness = draft.buildReadiness
   const changes = currentReadiness ? describeReadinessChanges(readiness, currentReadiness) : []
+  const queryContractFeatures = buildRuntimeQueryContractFeatures(draft)
   const [contractCopyState, setContractCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [pathCopyState, setPathCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [folderCopyState, setFolderCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
@@ -1639,6 +1767,19 @@ function RuntimeDraftView({
         </section>
       ) : null}
       <section className="report-section">
+        <h3>Query Contract</h3>
+        <p>Runtime must read this feature layout from the database and fill query values by these exact names.</p>
+        <div className="report-table feature-contract-table">
+          {queryContractFeatures.map((feature) => (
+            <div key={feature.name} className="report-row">
+              <span>{feature.name}</span>
+              <span>{feature.kind}</span>
+              <span>{feature.timeSeconds === null ? feature.boneSlot ?? '--' : `+${feature.trajectoryFrame}f / ${formatNumber(feature.timeSeconds)}s`}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="report-section">
         <h3>Artifacts</h3>
         <div className="report-table">
           {draft.artifacts.map((artifact) => (
@@ -1666,7 +1807,7 @@ function RuntimeDraftView({
             <div key={`${channel.name}-${channel.boneSlot ?? 'none'}`} className="report-row">
               <span>{channel.name}</span>
               <span>{channel.kind}</span>
-              <span>{channel.trajectoryFrames.length ? `${channel.boneSlot ?? '--'} +${channel.trajectoryFrames.join('/')}f` : channel.boneSlot ?? '--'}</span>
+              <span>{channel.trajectoryFrames.length ? `${channel.boneSlot ?? '--'} ${formatTrajectoryChannelOffsets(channel)}` : channel.boneSlot ?? '--'}</span>
             </div>
           ))}
         </div>
@@ -1728,7 +1869,7 @@ function RuntimeDraftView({
             <div key={`${clip.clipId}-${clip.isMirrored ? 'mirror' : 'source'}-database`} className={`report-row ${clip.footContacts.length ? 'ok' : 'warning'}`}>
               <span>{clip.clipName}</span>
               <span>{clip.isMirrored ? 'Mirrored' : 'Source'}</span>
-              <span>{`${clip.plannedSampleCount} samples, ${clip.footContacts.length} contact tracks`}</span>
+              <span>{`${clip.plannedSampleCount} samples, ${formatSourceTimeline(clip)}, ${clip.footContacts.length} contact tracks`}</span>
             </div>
           )) : <p>No database clips planned</p>}
         </div>
@@ -1830,6 +1971,11 @@ function DatabaseDraftView({
     const payload = {
       schema: database.schema,
       scale: database.scale,
+      sourceClip: selectedSampleClip ? {
+        frameCount: selectedSampleClip.frameCount,
+        frameRate: selectedSampleClip.frameRate,
+        durationSeconds: selectedSampleClip.durationSeconds,
+      } : null,
       sample: {
         clipId: selectedSample.clipId,
         clipName: selectedSampleClip?.clipName ?? selectedSample.clipId,
@@ -1896,7 +2042,7 @@ function DatabaseDraftView({
             <div key={`${clip.clipId}-${clip.isMirrored ? 'mirror' : 'source'}-database-view`} className={`report-row ${clip.footContacts.length ? 'ok' : 'warning'}`}>
               <span>{clip.clipName}</span>
               <span>{clip.clipRole ?? 'Unassigned'}{clip.isMirrored ? ' mirror' : ''}</span>
-              <span>{`${clip.plannedSampleCount} samples, ${clip.footContacts.length} contact tracks`}</span>
+              <span>{`${clip.plannedSampleCount} samples, ${formatSourceTimeline(clip)}, ${clip.footContacts.length} contact tracks`}</span>
             </div>
           )) : <p>No database clips planned</p>}
         </div>
@@ -1965,6 +2111,8 @@ function DatabaseDraftView({
               <dd>{selectedSample.frame + 1}</dd>
               <dt>Time</dt>
               <dd>{`${formatNumber(selectedSample.seconds)}s`}</dd>
+              <dt>Source FPS</dt>
+              <dd>{selectedSampleClip ? formatSourceTimeline(selectedSampleClip) : 'Unknown'}</dd>
               <dt>Scale</dt>
               <dd>{`${formatRuntimeScaleMode(database.scale.mode)} x${formatNumber(database.scale.normalizationFactor)}`}</dd>
             </dl>
@@ -2006,13 +2154,20 @@ function DatabaseDraftView({
 
 function TimelinePanel({
   clip,
+  title,
   frame,
   frameCount,
   frameRate,
   durationSeconds,
   hasMetadata,
+  isEnabled,
   isPlaying,
   footContacts,
+  markerFrames = [],
+  ghostingMode,
+  onGhostingModeChange,
+  showQueryVectors,
+  onShowQueryVectorsChange,
   onTogglePlay,
   onStep,
   onSeek,
@@ -2020,15 +2175,23 @@ function TimelinePanel({
   loopEndFrame,
   onSetLoopStart,
   onSetLoopEnd,
+  showLoopControls = true,
 }: {
   clip: ClipResponse | null
+  title: string
   frame: number
   frameCount: number
   frameRate: number
   durationSeconds: number | null
   hasMetadata: boolean
+  isEnabled: boolean
   isPlaying: boolean
   footContacts: ClipResponse['footContacts']
+  markerFrames?: number[]
+  ghostingMode?: SamplingGhostingMode
+  onGhostingModeChange?: (mode: SamplingGhostingMode) => void
+  showQueryVectors?: boolean
+  onShowQueryVectorsChange?: (value: boolean) => void
   onTogglePlay: () => void
   onStep: (delta: number) => void
   onSeek: (frame: number) => void
@@ -2036,10 +2199,14 @@ function TimelinePanel({
   loopEndFrame: number
   onSetLoopStart: (frame: number) => void
   onSetLoopEnd: (frame: number) => void
+  showLoopControls?: boolean
 }) {
   const rulerRef = useRef<HTMLDivElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const maxFrame = Math.max(frameCount - 1, 0)
+  const isClipTimeline = Boolean(clip)
+  const displayFrame = isClipTimeline ? frame + 1 : frame
+  const displayMaxFrame = isClipTimeline ? frameCount : maxFrame
   const progress = `${maxFrame > 0 ? (frame / maxFrame) * 100 : 0}%`
   const loopStartProgress = `${maxFrame > 0 ? (loopStartFrame / maxFrame) * 100 : 0}%`
   const loopEndProgress = `${maxFrame > 0 ? (loopEndFrame / maxFrame) * 100 : 0}%`
@@ -2051,13 +2218,19 @@ function TimelinePanel({
     : 0
   const metadataSuffix = hasMetadata ? '' : ' estimated'
   const frameTickStep = frameCount <= 80 ? 1 : Math.ceil(frameCount / 80)
-  const frameLabelStep = frameCount <= 40 ? 5 : Math.max(10, Math.ceil(frameCount / 8))
+  const frameLabelStep = frameCount <= 40 ? 10 : Math.max(10, Math.ceil(frameCount / 80) * 10)
   const frameTicks = Array.from({ length: maxFrame + 1 }, (_, index) => index)
     .filter((index) => index === 0 || index === maxFrame || index % frameTickStep === 0)
     .map((index) => ({
       frame: index,
-      label: index === 0 || index === maxFrame || index % frameLabelStep === 0 ? `${index + 1}` : null,
+      label: index === 0 || index === maxFrame || index % frameLabelStep === 0 ? `${isClipTimeline ? index + 1 : index}` : null,
       left: `${maxFrame > 0 ? (index / maxFrame) * 100 : 0}%`,
+    }))
+  const timelineMarkers = markerFrames
+    .filter((markerFrame) => markerFrame >= 0 && markerFrame <= maxFrame)
+    .map((markerFrame) => ({
+      frame: markerFrame,
+      left: `${maxFrame > 0 ? (markerFrame / maxFrame) * 100 : 0}%`,
     }))
   const contactRanges = footContacts?.tracks.flatMap((track) =>
     track.ranges.flatMap((range) => {
@@ -2082,7 +2255,7 @@ function TimelinePanel({
   ) ?? []
 
   const seekFromClientX = (clientX: number) => {
-    if (!clip) {
+    if (!isEnabled) {
       return
     }
 
@@ -2100,40 +2273,42 @@ function TimelinePanel({
   }
 
   return (
-    <div className="timeline-strip">
+    <div className={`timeline-strip ${showLoopControls ? '' : 'sampling-timeline'}`}>
       <div className="timeline-controls" aria-label="Timeline controls">
-        <button type="button" disabled={!clip} onClick={() => onSeek(0)} title="First frame" aria-label="First frame">
+        <button type="button" disabled={!isEnabled} onClick={() => onSeek(0)} title="First frame" aria-label="First frame">
           <StepBack size={14} aria-hidden="true" />
         </button>
-        <button type="button" disabled={!clip} onClick={() => onStep(-1)} title="Previous frame" aria-label="Previous frame">
+        <button type="button" disabled={!isEnabled} onClick={() => onStep(-1)} title="Previous frame" aria-label="Previous frame">
           <StepBack size={14} aria-hidden="true" />
         </button>
-        <button type="button" disabled={!clip} onClick={onTogglePlay} title={isPlaying ? 'Pause' : 'Play'} aria-label={isPlaying ? 'Pause' : 'Play'}>
+        <button type="button" disabled={!isEnabled} onClick={onTogglePlay} title={isPlaying ? 'Pause' : 'Play'} aria-label={isPlaying ? 'Pause' : 'Play'}>
           {isPlaying ? <Pause size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
         </button>
-        <button type="button" disabled={!clip} onClick={() => onStep(1)} title="Next frame" aria-label="Next frame">
+        <button type="button" disabled={!isEnabled} onClick={() => onStep(1)} title="Next frame" aria-label="Next frame">
           <StepForward size={14} aria-hidden="true" />
         </button>
-        <button type="button" disabled={!clip} onClick={() => onSeek(maxFrame)} title="Last frame" aria-label="Last frame">
+        <button type="button" disabled={!isEnabled} onClick={() => onSeek(maxFrame)} title="Last frame" aria-label="Last frame">
           <StepForward size={14} aria-hidden="true" />
         </button>
       </div>
-      <div className="timeline-meta">
-        <span className="timeline-clip-name">{clip ? clip.name : 'No clip selected'}</span>
-        <span>{clip ? `${formatTimelineTime(currentSeconds)} / ${formatTimelineTime(displayDurationSeconds)}${metadataSuffix}` : '--:--'}</span>
-      </div>
+      {showLoopControls ? (
+        <div className="timeline-meta">
+          <span className="timeline-clip-name">{title}</span>
+          <span>{isEnabled ? `${formatTimelineTime(currentSeconds)} / ${formatTimelineTime(displayDurationSeconds)}${metadataSuffix}` : '--:--'}</span>
+        </div>
+      ) : null}
       <div
         ref={rulerRef}
         className={`timeline-ruler ${isDragging ? 'dragging' : ''}`}
         role="slider"
         aria-label="Timeline scrubber"
-        aria-valuemin={clip ? 1 : 0}
-        aria-valuemax={clip ? frameCount : 0}
-        aria-valuenow={clip ? frame + 1 : 0}
-        aria-valuetext={clip ? `Frame ${frame + 1} of ${frameCount}` : undefined}
-        tabIndex={clip ? 0 : -1}
+        aria-valuemin={isEnabled ? (isClipTimeline ? 1 : 0) : 0}
+        aria-valuemax={isEnabled ? displayMaxFrame : 0}
+        aria-valuenow={isEnabled ? displayFrame : 0}
+        aria-valuetext={isEnabled ? `Frame ${displayFrame} of ${displayMaxFrame}` : undefined}
+        tabIndex={isEnabled ? 0 : -1}
         onPointerDown={(event) => {
-          if (!clip) {
+          if (!isEnabled) {
             return
           }
 
@@ -2162,7 +2337,7 @@ function TimelinePanel({
           }
         }}
         onKeyDown={(event) => {
-          if (!clip) {
+          if (!isEnabled) {
             return
           }
 
@@ -2194,9 +2369,21 @@ function TimelinePanel({
             {tick.label ? <span>{tick.label}</span> : null}
           </span>
         ))}
-        <div className="timeline-loop-range" style={{ left: loopStartProgress, right: `calc(100% - ${loopEndProgress})` }} />
-        <div className="timeline-loop-marker start" style={{ left: loopStartProgress }} />
-        <div className="timeline-loop-marker end" style={{ left: loopEndProgress }} />
+        {showLoopControls ? (
+          <>
+            <div className="timeline-loop-range" style={{ left: loopStartProgress, right: `calc(100% - ${loopEndProgress})` }} />
+            <div className="timeline-loop-marker start" style={{ left: loopStartProgress }} />
+            <div className="timeline-loop-marker end" style={{ left: loopEndProgress }} />
+          </>
+        ) : null}
+        {timelineMarkers.map((marker) => (
+          <div
+            key={`marker-${marker.frame}`}
+            className="timeline-sampling-marker"
+            style={{ left: marker.left }}
+            aria-hidden="true"
+          />
+        ))}
         {contactRanges.map((range) => (
           <div
             key={range.key}
@@ -2210,7 +2397,7 @@ function TimelinePanel({
           className="timeline-playhead-hit"
           style={{ left: progress }}
           onPointerDown={(event) => {
-            if (!clip) {
+            if (!isEnabled) {
               return
             }
 
@@ -2242,39 +2429,98 @@ function TimelinePanel({
         />
         <div className="timeline-playhead" style={{ left: progress }}>
           <span className="timeline-playhead-handle" />
-          <span className="timeline-playhead-frame">{frame + 1}</span>
+          <span className="timeline-playhead-frame">{displayFrame}</span>
         </div>
       </div>
-      <div className="timeline-readout" aria-label="Timeline readout">
-        <label className="frame-input-label">
-          F
-          <input
-            type="number"
-            min={1}
-            max={frameCount}
-            disabled={!clip}
-            value={clip ? frame + 1 : ''}
-            onChange={(event) => {
-              const nextFrame = Number.parseInt(event.target.value, 10)
-              if (Number.isFinite(nextFrame)) {
-                onSeek(nextFrame - 1)
-              }
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.currentTarget.blur()
-              }
-            }}
-          />
-          /{clip ? frameCount : '--'}
-        </label>
-        <span>{clip ? `${frameRate.toFixed(2)} fps` : '-- fps'}</span>
-        <span>{clip ? `L ${loopStartFrame + 1}-${loopEndFrame + 1}` : 'L --'}</span>
-        <span className="timeline-range-actions">
-          <button type="button" disabled={!clip} onClick={() => onSetLoopStart(frame)}>In</button>
-          <button type="button" disabled={!clip} onClick={() => onSetLoopEnd(frame)}>Out</button>
-        </span>
-      </div>
+      {showLoopControls ? (
+        <div className="timeline-readout" aria-label="Timeline readout">
+          <label className="frame-input-label">
+            F
+            <input
+              type="number"
+              min={1}
+              max={frameCount}
+              disabled={!isEnabled}
+              value={isEnabled ? displayFrame : ''}
+              onChange={(event) => {
+                const nextFrame = Number.parseInt(event.target.value, 10)
+                if (Number.isFinite(nextFrame)) {
+                  onSeek(isClipTimeline ? nextFrame - 1 : nextFrame)
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur()
+                }
+              }}
+            />
+            /{isEnabled ? displayMaxFrame : '--'}
+          </label>
+          <span className="timeline-fps-label">{isEnabled ? `@${frameRate.toFixed(0)} fps` : '-- fps'}</span>
+          <span>{isEnabled ? `L ${loopStartFrame + 1}-${loopEndFrame + 1}` : 'L --'}</span>
+          <span className="timeline-range-actions">
+            <button type="button" disabled={!isEnabled} onClick={() => onSetLoopStart(frame)}>In</button>
+            <button type="button" disabled={!isEnabled} onClick={() => onSetLoopEnd(frame)}>Out</button>
+          </span>
+        </div>
+      ) : null}
+      {!showLoopControls ? (
+        <div className="timeline-sampling-readout-row" aria-label="Sampling timeline controls">
+          <span className="timeline-time-label">{isEnabled ? `${formatTimelineTime(currentSeconds)} / ${formatTimelineTime(displayDurationSeconds)}` : '--:--'}</span>
+          <label className="frame-input-label">
+            F
+            <input
+              type="number"
+              min={1}
+              max={frameCount}
+              disabled={!isEnabled}
+              value={isEnabled ? displayFrame : ''}
+              onChange={(event) => {
+                const nextFrame = Number.parseInt(event.target.value, 10)
+                if (Number.isFinite(nextFrame)) {
+                  onSeek(nextFrame)
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur()
+                }
+              }}
+            />
+            /{isEnabled ? displayMaxFrame : '--'}
+          </label>
+          <span className="timeline-fps-label">{isEnabled ? `@${frameRate.toFixed(0)} fps` : '-- fps'}</span>
+          {onGhostingModeChange ? (
+            <label className="timeline-ghosting-label">
+              Ghost
+              <select
+                value={ghostingMode ?? 'none'}
+                disabled={!isEnabled}
+                onChange={(event) => onGhostingModeChange(event.target.value as SamplingGhostingMode)}
+              >
+                <option value="none">none</option>
+                <option value="every10">every 10</option>
+                <option value="every5">every 5</option>
+                <option value="every2">every 2</option>
+                <option value="every1">every 1</option>
+                <option value="window5">-5..+5</option>
+              </select>
+            </label>
+          ) : null}
+          {onShowQueryVectorsChange ? (
+            <label className="timeline-toggle-label">
+              <input
+                type="checkbox"
+                checked={Boolean(showQueryVectors)}
+                disabled={!isEnabled}
+                onChange={(event) => onShowQueryVectorsChange(event.target.checked)}
+              />
+              Query vectors
+            </label>
+          ) : null}
+          <span className="timeline-clip-name">{title}</span>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -2629,7 +2875,7 @@ function runtimeDatabaseSampleKey(sample: { clipId: string; isMirrored: boolean;
 }
 
 function samplingMatcherPreviewKey(match: SamplingMatcherPreviewMatch) {
-  return runtimeDatabaseSampleKey(match)
+  return `${match.pointFrame}:${runtimeDatabaseSampleKey(match)}`
 }
 
 function formatPoseBonePreview(bones: Array<{ boneName: string; translation: number[]; rotation: number[] }>) {
@@ -2655,7 +2901,7 @@ function updateVectorValue(values: number[], index: number, value: number) {
 }
 
 function deriveSamplingVelocityFromTrajectory(trajectory: SamplingQueryResponse['trajectory']) {
-  const firstPoint = trajectory[0]
+  const firstPoint = sortSamplingTrajectoryByFrame(trajectory)[0]
   if (!firstPoint) {
     return [0, 0, 0]
   }
@@ -2668,11 +2914,195 @@ function deriveSamplingVelocityFromTrajectory(trajectory: SamplingQueryResponse[
   ]
 }
 
+function sortSamplingTrajectoryByFrame(trajectory: SamplingQueryResponse['trajectory']) {
+  return [...trajectory].sort((left, right) => left.frameOffset - right.frameOffset)
+}
+
 function normalizeSamplingDraftVelocity(query: SamplingQueryResponse): SamplingQueryResponse {
   return {
     ...query,
     velocity: deriveSamplingVelocityFromTrajectory(query.trajectory),
   }
+}
+
+function extrapolateTrajectoryPoint(
+  sourcePoint: SamplingQueryResponse['trajectory'][number],
+  previousPoint: SamplingQueryResponse['trajectory'][number] | null,
+  facing: number[],
+) {
+  if (previousPoint) {
+    const frameDelta = Math.max(sourcePoint.frameOffset - previousPoint.frameOffset, 1)
+    return {
+      frameOffset: sourcePoint.frameOffset + frameDelta,
+      position: [
+        Number(((sourcePoint.position[0] ?? 0) + ((sourcePoint.position[0] ?? 0) - (previousPoint.position[0] ?? 0))).toFixed(2)),
+        0,
+        Number(((sourcePoint.position[2] ?? 0) + ((sourcePoint.position[2] ?? 0) - (previousPoint.position[2] ?? 0))).toFixed(2)),
+      ],
+      direction: sourcePoint.direction,
+    }
+  }
+
+  const frameDelta = 20
+  const seconds = frameDelta / fallbackFrameRate
+  return {
+    frameOffset: sourcePoint.frameOffset + frameDelta,
+    position: [
+      Number(((sourcePoint.position[0] ?? 0) + (facing[0] ?? 0) * 100 * seconds).toFixed(2)),
+      0,
+      Number(((sourcePoint.position[2] ?? 0) + (facing[2] ?? 1) * 100 * seconds).toFixed(2)),
+    ],
+    direction: sourcePoint.direction,
+  }
+}
+
+function buildSamplingGhostPosePreviews(
+  poseSamples: RuntimePoseSampleResponse[],
+  match: SamplingMatcherPreviewMatch,
+  query: SamplingQueryResponse,
+  previewFrame: number,
+  ghostingMode: SamplingGhostingMode,
+): SamplingGhostPosePreview[] {
+  const matchPoseSamples = poseSamples.filter((sample) =>
+    sample.clipId === match.clipId &&
+    sample.isMirrored === match.isMirrored)
+  const maxPreviewFrame = getSamplingPreviewFrameCount(query) - 1
+  const trailFrames = buildSamplingGhostTrailFrames(previewFrame, maxPreviewFrame, ghostingMode)
+  const current = buildSamplingGhostPosePreview(matchPoseSamples, match, query, previewFrame, false)
+  const trail = trailFrames
+    .filter((frame) => frame !== previewFrame)
+    .map((frame) => buildSamplingGhostPosePreview(matchPoseSamples, match, query, frame, true))
+    .filter((preview) => preview !== null)
+
+  return current ? [...trail, current] : trail
+}
+
+function buildSamplingGhostPosePreview(
+  samples: RuntimePoseSampleResponse[],
+  match: SamplingMatcherPreviewMatch,
+  query: SamplingQueryResponse,
+  previewFrame: number,
+  isTrail: boolean,
+): SamplingGhostPosePreview | null {
+  const pose = findClosestPoseSample(samples, wrapPosePreviewFrame(samples, match.frame + previewFrame))
+  if (!pose) {
+    return null
+  }
+
+  const placement = getSamplingPreviewPlacement(query, previewFrame)
+  return {
+    pose,
+    anchor: placement.anchor,
+    heading: placement.heading,
+    alpha: isTrail ? 0.18 : 0.92,
+    scale: isTrail ? 0.58 : 1,
+  }
+}
+
+function buildSamplingGhostTrailFrames(currentFrame: number, maxFrame: number, mode: SamplingGhostingMode) {
+  if (mode === 'none') {
+    return []
+  }
+
+  if (mode === 'window5') {
+    return Array.from({ length: 11 }, (_, index) => currentFrame - 5 + index)
+      .filter((frame) => frame >= 0 && frame <= maxFrame)
+  }
+
+  const step = mode === 'every10'
+    ? 10
+    : mode === 'every5'
+      ? 5
+      : mode === 'every2'
+        ? 2
+        : 1
+  return Array.from({ length: Math.floor(maxFrame / step) + 1 }, (_, index) => index * step)
+}
+
+function wrapPosePreviewFrame(samples: RuntimePoseSampleResponse[], targetFrame: number) {
+  const maxFrame = samples.reduce((currentMax, sample) => Math.max(currentMax, sample.frame), 0)
+  if (maxFrame <= 0) {
+    return targetFrame
+  }
+
+  const frameCount = maxFrame + 1
+  return ((targetFrame % frameCount) + frameCount) % frameCount
+}
+
+function findClosestPoseSample(samples: RuntimePoseSampleResponse[], targetFrame: number) {
+  return samples.reduce<RuntimePoseSampleResponse | null>((best, sample) => {
+    if (!best) {
+      return sample
+    }
+
+    return Math.abs(sample.frame - targetFrame) < Math.abs(best.frame - targetFrame) ? sample : best
+  }, null)
+}
+
+function getSamplingPointHeading(points: SamplingQueryResponse['trajectory'], index: number, fallback: number[]) {
+  const point = points[index]
+  const nextPoint = points[index + 1]
+  const previousPoint = points[index - 1]
+  if (point && nextPoint) {
+    return [
+      (nextPoint.position[0] ?? 0) - (point.position[0] ?? 0),
+      0,
+      (nextPoint.position[2] ?? 0) - (point.position[2] ?? 0),
+    ]
+  }
+
+  if (point && previousPoint) {
+    return [
+      (point.position[0] ?? 0) - (previousPoint.position[0] ?? 0),
+      0,
+      (point.position[2] ?? 0) - (previousPoint.position[2] ?? 0),
+    ]
+  }
+
+  return point?.position ?? fallback
+}
+
+function getSamplingPreviewFrameCount(query: SamplingQueryResponse) {
+  const maxFrame = query.trajectory.reduce((currentMax, point) => Math.max(currentMax, point.frameOffset), 0)
+  return Math.max(maxFrame + 1, 1)
+}
+
+function getSamplingPreviewPlacement(query: SamplingQueryResponse, frame: number) {
+  const points = [
+    { frameOffset: 0, position: [0, 0, 0], direction: query.facing },
+    ...[...query.trajectory].sort((left, right) => left.frameOffset - right.frameOffset),
+  ]
+  const clampedFrame = Math.max(frame, 0)
+  const nextIndex = points.findIndex((point) => point.frameOffset >= clampedFrame)
+  const nextPoint = nextIndex >= 0 ? points[nextIndex] : points.at(-1)
+  const previousPoint = nextIndex > 0
+    ? points[nextIndex - 1]
+    : points[0]
+
+  if (!nextPoint || !previousPoint || nextPoint.frameOffset === previousPoint.frameOffset) {
+    return {
+      anchor: nextPoint?.position ?? [0, 0, 0],
+      heading: getSamplingPointHeading(points, Math.max(nextIndex, 0), query.facing),
+    }
+  }
+
+  const segmentRatio = Math.min(Math.max((clampedFrame - previousPoint.frameOffset) / (nextPoint.frameOffset - previousPoint.frameOffset), 0), 1)
+  return {
+    anchor: [
+      lerp(previousPoint.position[0] ?? 0, nextPoint.position[0] ?? 0, segmentRatio),
+      0,
+      lerp(previousPoint.position[2] ?? 0, nextPoint.position[2] ?? 0, segmentRatio),
+    ],
+    heading: [
+      (nextPoint.position[0] ?? 0) - (previousPoint.position[0] ?? 0),
+      0,
+      (nextPoint.position[2] ?? 0) - (previousPoint.position[2] ?? 0),
+    ],
+  }
+}
+
+function lerp(start: number, end: number, ratio: number) {
+  return Number((start + (end - start) * ratio).toFixed(2))
 }
 
 function vectorToYawDegrees(values: number[]) {
@@ -2684,60 +3114,65 @@ function vectorToYawDegrees(values: number[]) {
 
 function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: RuntimeDatabaseDraftResponse): SamplingMatcherPreviewMatch[] {
   const clipLookup = new Map(database.clips.map((clip) => [runtimeClipKey(clip.clipId, clip.isMirrored), clip]))
-  const queryFeatures = buildSamplingQueryFeatureValues(query, database.scale.normalizationFactor)
+  const trajectory = sortSamplingTrajectoryByFrame(query.trajectory)
+  return trajectory
+    .map((point, pointIndex) => {
+      const queryFeatures = buildSamplingPointQueryFeatureValues(query, point, database.scale.normalizationFactor)
+      return database.samples
+        .map((sample) => {
+          const clip = clipLookup.get(runtimeClipKey(sample.clipId, sample.isMirrored))
+          if (query.roleFilter && clip?.clipRole !== query.roleFilter) {
+            return null
+          }
 
-  return database.samples
-    .map((sample) => {
-      const clip = clipLookup.get(runtimeClipKey(sample.clipId, sample.isMirrored))
-      if (query.roleFilter && clip?.clipRole !== query.roleFilter) {
-        return null
-      }
+          let score = 0
+          let matchedFeatureCount = 0
+          const breakdown = {
+            velocity: 0,
+            trajectoryPosition: 0,
+            trajectoryDirection: 0,
+            other: 0,
+          }
+          const breakdownCounts = {
+            velocity: 0,
+            trajectoryPosition: 0,
+            trajectoryDirection: 0,
+            other: 0,
+          }
 
-      let score = 0
-      let matchedFeatureCount = 0
-      const breakdown = {
-        velocity: 0,
-        trajectoryPosition: 0,
-        trajectoryDirection: 0,
-        other: 0,
-      }
-      const breakdownCounts = {
-        velocity: 0,
-        trajectoryPosition: 0,
-        trajectoryDirection: 0,
-        other: 0,
-      }
+          for (const [name, queryValue] of Object.entries(queryFeatures)) {
+            const sampleValue = getSamplingSampleFeatureValue(sample.features, name)
+            if (sampleValue === null || sampleValue === undefined || !Number.isFinite(sampleValue)) {
+              continue
+            }
 
-      for (const [name, queryValue] of Object.entries(queryFeatures)) {
-        const sampleValue = sample.features[name]
-        if (sampleValue === null || sampleValue === undefined || !Number.isFinite(sampleValue)) {
-          continue
-        }
+            const delta = sampleValue - queryValue
+            const componentScore = delta * delta
+            const group = classifySamplingFeature(name)
+            score += componentScore
+            breakdown[group] += componentScore
+            breakdownCounts[group] += 1
+            matchedFeatureCount += 1
+          }
 
-        const delta = sampleValue - queryValue
-        const componentScore = delta * delta
-        const group = classifySamplingFeature(name)
-        score += componentScore
-        breakdown[group] += componentScore
-        breakdownCounts[group] += 1
-        matchedFeatureCount += 1
-      }
-
-      return {
-        clipId: sample.clipId,
-        clipName: clip?.clipName ?? sample.clipId,
-        isMirrored: sample.isMirrored,
-        frame: sample.frame,
-        score: matchedFeatureCount > 0 ? Math.sqrt(score / matchedFeatureCount) : 0,
-        breakdown,
-        breakdownCounts,
-        matchedFeatureCount,
-      }
+          return {
+            pointIndex,
+            pointFrame: point.frameOffset,
+            clipId: sample.clipId,
+            clipName: clip?.clipName ?? sample.clipId,
+            isMirrored: sample.isMirrored,
+            frame: sample.frame,
+            score: matchedFeatureCount > 0 ? Math.sqrt(score / matchedFeatureCount) : 0,
+            breakdown,
+            breakdownCounts,
+            matchedFeatureCount,
+          }
+        })
+        .filter((match) => match !== null)
+        .filter((match) => match.matchedFeatureCount > 0)
+        .sort((left, right) => left.score - right.score)[0] ?? null
     })
     .filter((match) => match !== null)
-    .filter((match) => match.matchedFeatureCount > 0)
-    .sort((left, right) => left.score - right.score)
-    .slice(0, 5)
 }
 
 function classifySamplingFeature(name: string): keyof SamplingMatcherPreviewMatch['breakdown'] {
@@ -2784,7 +3219,11 @@ function countSamplingRoleCandidates(query: SamplingQueryResponse, database: Run
   return database.samples.filter((sample) => clipLookup.get(runtimeClipKey(sample.clipId, sample.isMirrored))?.clipRole === query.roleFilter).length
 }
 
-function buildSamplingQueryFeatureValues(query: SamplingQueryResponse, normalizationFactor: number) {
+function buildSamplingPointQueryFeatureValues(
+  query: SamplingQueryResponse,
+  point: SamplingQueryResponse['trajectory'][number],
+  normalizationFactor: number,
+) {
   const facing = normalizeVector2(query.facing[0] ?? 0, query.facing[2] ?? 1)
   const derivedVelocity = deriveSamplingVelocityFromTrajectory(query.trajectory)
   const velocityX = derivedVelocity[0] ?? 0
@@ -2793,22 +3232,53 @@ function buildSamplingQueryFeatureValues(query: SamplingQueryResponse, normaliza
     hips_velocity: Number((Math.hypot(velocityX, velocityZ) * normalizationFactor).toFixed(4)),
   }
 
-  for (const offset of [20, 40, 60]) {
-    const point = nearestTrajectoryPoint(query.trajectory, offset)
-    if (!point) {
-      continue
-    }
-
-    const x = point.position[0] ?? 0
-    const z = point.position[2] ?? 0
-    const projectedDistance = (x * facing.x + z * facing.z) * normalizationFactor
-    const pointDirection = normalizeVector2(point.direction[0] ?? query.facing[0] ?? 0, point.direction[2] ?? query.facing[2] ?? 1)
-    const facingAlignment = pointDirection.x * facing.x + pointDirection.z * facing.z
-    values[`trajectory_position_${offset}`] = Number(projectedDistance.toFixed(4))
-    values[`trajectory_direction_${offset}`] = Number(facingAlignment.toFixed(4))
-  }
+  const offset = point.frameOffset
+  const x = point.position[0] ?? 0
+  const z = point.position[2] ?? 0
+  const projectedDistance = (x * facing.x + z * facing.z) * normalizationFactor
+  const pointDirection = normalizeVector2(point.direction[0] ?? query.facing[0] ?? 0, point.direction[2] ?? query.facing[2] ?? 1)
+  const facingAlignment = pointDirection.x * facing.x + pointDirection.z * facing.z
+  values[buildTrajectoryFeatureValueName('trajectory_position', offset)] = Number(projectedDistance.toFixed(4))
+  values[buildTrajectoryFeatureValueName('trajectory_direction', offset)] = Number(facingAlignment.toFixed(4))
 
   return values
+}
+
+function buildSamplingContractQueryFeatureValues(
+  query: SamplingQueryResponse,
+  channels: RuntimeFeatureChannelResponse[],
+  normalizationFactor: number,
+) {
+  const values = new Map<string, number | null>()
+  const facing = normalizeVector2(query.facing[0] ?? 0, query.facing[2] ?? 1)
+  const derivedVelocity = deriveSamplingVelocityFromTrajectory(query.trajectory)
+  const velocityX = derivedVelocity[0] ?? 0
+  const velocityZ = derivedVelocity[2] ?? 0
+
+  for (const channel of channels) {
+    if (channel.trajectoryFrames.length > 0) {
+      for (const frame of channel.trajectoryFrames) {
+        const placement = getSamplingPreviewPlacement(query, frame)
+        const key = buildTrajectoryFeatureValueName(channel.name, frame)
+        if (channel.name === 'trajectory_position') {
+          const x = placement.anchor[0] ?? 0
+          const z = placement.anchor[2] ?? 0
+          values.set(key, Number(((x * facing.x + z * facing.z) * normalizationFactor).toFixed(4)))
+        } else if (channel.name === 'trajectory_direction') {
+          const heading = normalizeVector2(placement.heading[0] ?? query.facing[0] ?? 0, placement.heading[2] ?? query.facing[2] ?? 1)
+          values.set(key, Number((heading.x * facing.x + heading.z * facing.z).toFixed(4)))
+        } else {
+          values.set(key, null)
+        }
+      }
+    } else if (channel.name === 'hips_velocity') {
+      values.set(channel.name, Number((Math.hypot(velocityX, velocityZ) * normalizationFactor).toFixed(4)))
+    } else {
+      values.set(channel.name, null)
+    }
+  }
+
+  return [...values.entries()].map(([name, value]) => ({ name, value }))
 }
 
 function normalizeVector2(x: number, z: number) {
@@ -2816,31 +3286,83 @@ function normalizeVector2(x: number, z: number) {
   return length > 0.0001 ? { x: x / length, z: z / length } : { x: 0, z: 1 }
 }
 
-function nearestTrajectoryPoint(points: SamplingQueryResponse['trajectory'], frameOffset: number) {
-  return points.reduce<SamplingQueryResponse['trajectory'][number] | null>((best, point) => {
-    if (!best) {
-      return point
-    }
+function getSamplingSampleFeatureValue(features: Record<string, number | null>, name: string) {
+  const directValue = features[name]
+  if (directValue !== undefined) {
+    return directValue
+  }
 
-    return Math.abs(point.frameOffset - frameOffset) < Math.abs(best.frameOffset - frameOffset) ? point : best
-  }, null)
+  const trajectoryFeature = parseTrajectoryFeatureName(name)
+  if (!trajectoryFeature) {
+    return undefined
+  }
+
+  return estimateTrajectoryFeatureValue(features, trajectoryFeature.prefix, trajectoryFeature.frame)
+}
+
+function parseTrajectoryFeatureName(name: string) {
+  const match = /^(trajectory_(?:position|direction))_(\d+)f?$/.exec(name)
+  if (!match) {
+    return null
+  }
+
+  return {
+    prefix: match[1],
+    frame: Number.parseInt(match[2], 10),
+  }
+}
+
+function estimateTrajectoryFeatureValue(features: Record<string, number | null>, prefix: string, frame: number) {
+  const samples = Object.entries(features)
+    .map(([featureName, value]) => {
+      const parsed = parseTrajectoryFeatureName(featureName)
+      return parsed && parsed.prefix === prefix && value !== null && Number.isFinite(value)
+        ? { frame: parsed.frame, value }
+        : null
+    })
+    .filter((sample) => sample !== null)
+    .sort((left, right) => left.frame - right.frame)
+
+  if (!samples.length) {
+    return undefined
+  }
+
+  if (samples.length === 1 || frame <= samples[0].frame) {
+    return samples[0].value
+  }
+
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1]
+    const next = samples[index]
+    if (frame <= next.frame) {
+      const ratio = (frame - previous.frame) / Math.max(next.frame - previous.frame, 1)
+      return previous.value + (next.value - previous.value) * ratio
+    }
+  }
+
+  const last = samples.at(-1)
+  return last?.value
 }
 
 function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
   const contract = {
     characterName: draft.characterName,
     sampleFrameStep: draft.sampleFrameStep,
+    samplingFrameRate: defaultSamplingFrameRate,
+    samplingFrameRateNote: 'Sampling authoring frames convert to seconds with frameOffset / samplingFrameRate.',
     scale: {
       mode: draft.features.scale.mode,
       normalizationFactor: draft.features.scale.normalizationFactor,
       maxObservedRootSpeed: draft.features.scale.maxObservedRootSpeed,
       note: 'Engine query units must match these database units.',
     },
-    features: draft.features.channels.map((channel) => ({
+    features: buildRuntimeQueryContractFeatures(draft),
+    sourceChannels: draft.features.channels.map((channel) => ({
       name: channel.name,
       kind: channel.kind,
       boneSlot: channel.boneSlot,
       trajectoryFrames: channel.trajectoryFrames,
+      trajectoryTimesSeconds: channel.trajectoryTimesSeconds,
     })),
     skeletonSlots: draft.skeleton.slots.map((slot) => ({
       slot: slot.slot,
@@ -2856,6 +3378,34 @@ function buildEngineQueryContract(draft: RuntimeBuildDraftResponse) {
   }
 
   return JSON.stringify(contract, null, 2)
+}
+
+function buildRuntimeQueryContractFeatures(draft: RuntimeBuildDraftResponse): RuntimeQueryContractFeature[] {
+  return draft.features.channels.flatMap<RuntimeQueryContractFeature>((channel) => {
+    if (channel.trajectoryFrames.length > 0) {
+      return channel.trajectoryFrames.map((frame, index) => ({
+        name: buildTrajectoryFeatureValueName(channel.name, frame),
+        sourceChannel: channel.name,
+        kind: channel.kind,
+        boneSlot: channel.boneSlot,
+        trajectoryFrame: frame,
+        timeSeconds: channel.trajectoryTimesSeconds?.[index] ?? samplingFrameSeconds(frame),
+      }))
+    }
+
+    return [{
+      name: channel.name,
+      sourceChannel: channel.name,
+      kind: channel.kind,
+      boneSlot: channel.boneSlot,
+      trajectoryFrame: null,
+      timeSeconds: null,
+    }]
+  })
+}
+
+function buildTrajectoryFeatureValueName(channelName: string, frameOffset: number) {
+  return `${channelName}_${frameOffset}f`
 }
 
 function buildReportPathsText(report: BuildReportResponse) {
@@ -2896,6 +3446,46 @@ function formatRuntimeScaleSummary(draft: RuntimeBuildDraftResponse | null) {
 
   const scale = draft.features.scale
   return `${formatRuntimeScaleMode(scale.mode)} x${formatNumber(scale.normalizationFactor)}`
+}
+
+function samplingFrameSeconds(frame: number) {
+  return frame / defaultSamplingFrameRate
+}
+
+function formatSamplingFrameTime(frame: number) {
+  return `${formatNumber(samplingFrameSeconds(frame))}s @${defaultSamplingFrameRate}fps`
+}
+
+function formatSamplingFrameSeconds(frame: number) {
+  return `${formatNumber(samplingFrameSeconds(frame))}s`
+}
+
+function parsePredictionFrameList(value: string, fallback: number[]) {
+  const parsed = value
+    .split(/[,\s/]+/)
+    .map((part) => Math.round(Number(part)))
+    .filter((frame) => Number.isFinite(frame) && frame > 0)
+    .map((frame) => Math.min(Math.max(frame, 1), 600))
+  const uniqueFrames = [...new Set(parsed)].sort((left, right) => left - right)
+  return uniqueFrames.length ? uniqueFrames : fallback
+}
+
+function numberArraysEqual(left: number[], right: number[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function formatTrajectoryChannelOffsets(channel: RuntimeFeatureChannelResponse) {
+  const times = channel.trajectoryTimesSeconds?.length
+    ? channel.trajectoryTimesSeconds
+    : channel.trajectoryFrames.map(samplingFrameSeconds)
+  return `+${channel.trajectoryFrames.join('/')}f @${defaultSamplingFrameRate} (${times.map((seconds) => `${formatNumber(seconds)}s`).join('/')})`
+}
+
+function formatSourceTimeline(clip: { frameCount?: number | null; frameRate?: number | null; durationSeconds?: number | null }) {
+  const frameRate = clip.frameRate && clip.frameRate > 0 ? `${formatNumber(clip.frameRate)} fps` : 'unknown fps'
+  const frameCount = clip.frameCount ? `${clip.frameCount}f` : 'unknown frames'
+  const duration = clip.durationSeconds && clip.durationSeconds > 0 ? `${formatNumber(clip.durationSeconds)}s` : 'unknown duration'
+  return `${frameRate}, ${frameCount}, ${duration}`
 }
 
 function formatRuntimeSettingsSaveState(state: 'idle' | 'saving' | 'saved' | 'failed') {
@@ -3132,6 +3722,7 @@ function CharacterInspector({
   selectedSamplingDraft,
   runtimeSampleFrameStep,
   runtimeScaleMode,
+  runtimeTrajectoryPredictionFrames,
   activeTab,
   runtimeSettingsSaveState,
   onGenerateBuildReport,
@@ -3147,6 +3738,7 @@ function CharacterInspector({
   onUpdateSampling,
   onRuntimeSampleFrameStepChange,
   onRuntimeScaleModeChange,
+  onRuntimeTrajectoryPredictionFramesChange,
   onSelectClip,
   selectedMatcherKey,
   onPreviewMatcherSample,
@@ -3162,6 +3754,7 @@ function CharacterInspector({
   selectedSamplingDraft: SamplingQueryResponse | null
   runtimeSampleFrameStep: number
   runtimeScaleMode: RuntimeScaleMode
+  runtimeTrajectoryPredictionFrames: number[]
   activeTab: CharacterInspectorTab
   runtimeSettingsSaveState: 'idle' | 'saving' | 'saved' | 'failed'
   onGenerateBuildReport: () => void
@@ -3177,11 +3770,24 @@ function CharacterInspector({
   onUpdateSampling: (samplingId: string, update: SamplingQueryUpdateRequest) => void
   onRuntimeSampleFrameStepChange: (value: number) => void
   onRuntimeScaleModeChange: (value: RuntimeScaleMode) => void
+  onRuntimeTrajectoryPredictionFramesChange: (value: number[]) => void
   onSelectClip: (clipId: string) => void
   selectedMatcherKey: string | null
   onPreviewMatcherSample: (match: SamplingMatcherPreviewMatch) => void
   onSelectMatcherSample: (match: SamplingMatcherPreviewMatch) => void
 }) {
+  const trajectoryFrameSource = runtimeTrajectoryPredictionFrames.join(', ')
+  const [trajectoryFrameDraft, setTrajectoryFrameDraft] = useState({ source: trajectoryFrameSource, value: trajectoryFrameSource })
+  const visibleTrajectoryFrameDraft = trajectoryFrameDraft.source === trajectoryFrameSource ? trajectoryFrameDraft.value : trajectoryFrameSource
+  const parsedTrajectoryFrameDraft = parsePredictionFrameList(visibleTrajectoryFrameDraft, runtimeTrajectoryPredictionFrames)
+  const commitTrajectoryFrameDraft = () => {
+    const nextFrames = parsePredictionFrameList(visibleTrajectoryFrameDraft, runtimeTrajectoryPredictionFrames)
+    setTrajectoryFrameDraft({ source: trajectoryFrameSource, value: nextFrames.join(', ') })
+    if (!numberArraysEqual(nextFrames, runtimeTrajectoryPredictionFrames)) {
+      onRuntimeTrajectoryPredictionFramesChange(nextFrames)
+    }
+  }
+
   return (
     <div className="inspector-content">
       <section className="inspector-section">
@@ -3234,6 +3840,25 @@ function CharacterInspector({
                 onChange={(event) => onRuntimeSampleFrameStepChange(Math.min(Math.max(Math.round(Number(event.target.value) || 1), 1), 120))}
               />
             </label>
+            <label className="setting-field">
+              {`Trajectory horizon F@${defaultSamplingFrameRate}`}
+              <input
+                type="text"
+                value={visibleTrajectoryFrameDraft}
+                disabled={isBusy}
+                onChange={(event) => setTrajectoryFrameDraft({ source: trajectoryFrameSource, value: event.target.value })}
+                onBlur={commitTrajectoryFrameDraft}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    commitTrajectoryFrameDraft()
+                    event.currentTarget.blur()
+                  }
+                }}
+              />
+            </label>
+            <p className="muted">
+              {parsedTrajectoryFrameDraft.map((frame) => `+${frame}f=${formatSamplingFrameTime(frame)}`).join(', ')}
+            </p>
             <label className="setting-field">
               Runtime scale mode
               <select
@@ -3366,9 +3991,19 @@ function SamplingInspector({
     () => draft && runtimeDraft ? buildSamplingMatcherPreview(draft, runtimeDraft.database) : [],
     [draft, runtimeDraft],
   )
+  const samplingQueryFeatureValues = useMemo(
+    () => draft && runtimeDraft
+      ? buildSamplingContractQueryFeatureValues(draft, runtimeDraft.features.channels, runtimeDraft.database.scale.normalizationFactor)
+      : [],
+    [draft, runtimeDraft],
+  )
   const roleFilteredCandidateCount = useMemo(
     () => draft && runtimeDraft ? countSamplingRoleCandidates(draft, runtimeDraft.database) : 0,
     [draft, runtimeDraft],
+  )
+  const runtimeSampleLookup = useMemo(
+    () => new Map(runtimeDraft?.database.samples.map((sample) => [runtimeDatabaseSampleKey(sample), sample]) ?? []),
+    [runtimeDraft],
   )
 
   function updateDraft(updater: (current: SamplingQueryResponse) => SamplingQueryResponse) {
@@ -3484,6 +4119,44 @@ function SamplingInspector({
     })
   }
 
+  function insertTrajectoryPointNear(index: number) {
+    updateDraft((current) => {
+      const sourcePoint = current.trajectory[index]
+      if (!sourcePoint) {
+        return current
+      }
+
+      const sortedTrajectory = sortSamplingTrajectoryByFrame(current.trajectory)
+      const sortedIndex = sortedTrajectory.findIndex((point) => point === sourcePoint)
+      const previousPoint = sortedIndex > 0 ? sortedTrajectory[sortedIndex - 1] : null
+      const nextPoint = sortedIndex >= 0 ? sortedTrajectory[sortedIndex + 1] : null
+      const insertedPoint = nextPoint
+        ? {
+            frameOffset: Math.max(Math.round((sourcePoint.frameOffset + nextPoint.frameOffset) / 2), sourcePoint.frameOffset + 1),
+            position: [
+              Number((((sourcePoint.position[0] ?? 0) + (nextPoint.position[0] ?? 0)) * 0.5).toFixed(2)),
+              0,
+              Number((((sourcePoint.position[2] ?? 0) + (nextPoint.position[2] ?? 0)) * 0.5).toFixed(2)),
+            ],
+            direction: sourcePoint.direction,
+          }
+        : extrapolateTrajectoryPoint(sourcePoint, previousPoint, current.facing)
+
+      const insertAfterIndex = current.trajectory.findIndex((point) => point === sourcePoint)
+      const trajectory = [
+        ...current.trajectory.slice(0, insertAfterIndex + 1),
+        insertedPoint,
+        ...current.trajectory.slice(insertAfterIndex + 1),
+      ]
+
+      return {
+        ...current,
+        velocity: deriveSamplingVelocityFromTrajectory(trajectory),
+        trajectory,
+      }
+    })
+  }
+
   function deleteTrajectoryPoint(index: number) {
     updateDraft((current) => {
       const trajectory = current.trajectory.filter((_, pointIndex) => pointIndex !== index)
@@ -3493,6 +4166,19 @@ function SamplingInspector({
         trajectory,
       }
     })
+  }
+
+  function trajectoryOriginSpeed() {
+    if (!draft) {
+      return 0
+    }
+
+    const nextPoint = sortSamplingTrajectoryByFrame(draft.trajectory)[0]
+    if (!nextPoint) {
+      return 0
+    }
+
+    return trajectorySegmentSpeed(0, [0, 0, 0], nextPoint.frameOffset, nextPoint.position)
   }
 
   function trajectoryPointSpeed(index: number) {
@@ -3505,13 +4191,26 @@ function SamplingInspector({
       return 0
     }
 
-    const previousPoint = draft.trajectory[index - 1]
-    const previousFrame = previousPoint?.frameOffset ?? 0
-    const previousPosition = previousPoint?.position ?? [0, 0, 0]
-    const frameDelta = Math.max(point.frameOffset - previousFrame, 1)
+    const sortedTrajectory = sortSamplingTrajectoryByFrame(draft.trajectory)
+    const sortedIndex = sortedTrajectory.findIndex((item) => item === point)
+    const nextPoint = sortedIndex >= 0 ? sortedTrajectory[sortedIndex + 1] : null
+    if (!nextPoint) {
+      return 0
+    }
+
+    return trajectorySegmentSpeed(point.frameOffset, point.position, nextPoint.frameOffset, nextPoint.position)
+  }
+
+  function trajectorySegmentSpeed(
+    fromFrame: number,
+    fromPosition: number[],
+    toFrame: number,
+    toPosition: number[],
+  ) {
+    const frameDelta = Math.max(toFrame - fromFrame, 1)
     const seconds = frameDelta / fallbackFrameRate
-    const dx = (point.position[0] ?? 0) - (previousPosition[0] ?? 0)
-    const dz = (point.position[2] ?? 0) - (previousPosition[2] ?? 0)
+    const dx = (toPosition[0] ?? 0) - (fromPosition[0] ?? 0)
+    const dz = (toPosition[2] ?? 0) - (fromPosition[2] ?? 0)
     return Math.hypot(dx, dz) / seconds
   }
 
@@ -3530,6 +4229,8 @@ function SamplingInspector({
         <dd>{draft?.roleFilter ?? 'Any role'}</dd>
         <dt>Trajectory</dt>
         <dd>{draft ? draft.trajectory.map((point) => point.frameOffset).join(' / ') : '--'}</dd>
+        <dt>Sampling FPS</dt>
+        <dd>{`${defaultSamplingFrameRate} fps`}</dd>
         <dt>Scale</dt>
         <dd>{runtimeScale}</dd>
       </dl>
@@ -3569,14 +4270,35 @@ function SamplingInspector({
             </label>
           </div>
           <div className="sampling-trajectory-header">
-            <span>Trajectory</span>
+            <span>{`Trajectory @${defaultSamplingFrameRate}fps`}</span>
             <button type="button" className="mini-action" onClick={addTrajectoryPoint}>+ point</button>
           </div>
           <div className="sampling-trajectory-list">
+            <div className="sampling-trajectory-row sampling-trajectory-origin">
+              <label className="setting-field">
+                {`F@${defaultSamplingFrameRate}`}
+                <input type="number" value={0} readOnly aria-label="Origin frame" />
+              </label>
+              <label className="setting-field">
+                X
+                <input type="number" value={0} readOnly aria-label="Origin X position" />
+              </label>
+              <label className="setting-field">
+                Z
+                <input type="number" value={0} readOnly aria-label="Origin Z position" />
+              </label>
+              <div className="sampling-trajectory-tools">
+                <div className="sampling-trajectory-origin-label">{formatSamplingFrameTime(0)}</div>
+                <div className="sampling-trajectory-speed">
+                  <span>Speed</span>
+                  <strong>{`${formatNumber(trajectoryOriginSpeed())} cm/s`}</strong>
+                </div>
+              </div>
+            </div>
             {draft.trajectory.map((point, index) => (
               <div key={`${draft.id}-trajectory-${index}`} className="sampling-trajectory-row">
                 <label className="setting-field">
-                  F
+                  {`F@${defaultSamplingFrameRate}`}
                   <input type="number" min={1} value={point.frameOffset} onChange={(event) => updateTrajectory(index, 'frameOffset', Number(event.target.value) || 1)} />
                 </label>
                 <label className="setting-field">
@@ -3587,18 +4309,33 @@ function SamplingInspector({
                   Z
                   <input type="number" step={1} value={point.position[2] ?? 0} onChange={(event) => updateTrajectory(index, 'positionZ', Number(event.target.value) || 0)} />
                 </label>
-                <div className="sampling-trajectory-speed">
-                  <span>Speed</span>
-                  <strong>{`${formatNumber(trajectoryPointSpeed(index))} cm/s`}</strong>
+                <div className="sampling-trajectory-tools">
+                  <div className="sampling-trajectory-actions">
+                    <button
+                      type="button"
+                      className="mini-action mini-action-icon"
+                      onClick={() => insertTrajectoryPointNear(index)}
+                      title={`Insert trajectory point after ${index + 1}`}
+                      aria-label={`Insert trajectory point after ${index + 1}`}
+                    >
+                      <CirclePlus size={14} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-action mini-action-icon danger"
+                      disabled={draft.trajectory.length <= 1}
+                      onClick={() => deleteTrajectoryPoint(index)}
+                      title={`Delete trajectory point ${index + 1}`}
+                      aria-label={`Delete trajectory point ${index + 1}`}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div className="sampling-trajectory-speed">
+                    <span>{formatSamplingFrameTime(point.frameOffset)}</span>
+                    <strong>{`${formatNumber(trajectoryPointSpeed(index))} cm/s`}</strong>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  className="mini-action danger"
-                  disabled={draft.trajectory.length <= 1}
-                  onClick={() => deleteTrajectoryPoint(index)}
-                >
-                  Delete
-                </button>
               </div>
             ))}
           </div>
@@ -3610,35 +4347,57 @@ function SamplingInspector({
       ) : null}
       <section className="sampling-match-section">
         <div className="sampling-match-header">
-          <h3>Matcher Preview</h3>
+          <div className="sampling-match-title">
+            <h3>Matcher Preview</h3>
+            <span>{`@${defaultSamplingFrameRate} fps`}</span>
+          </div>
           <div className="sampling-match-actions">
             <button type="button" className="mini-action" disabled={isBusy || !hasRuntimeDraft} onClick={onLoadRuntimeDraft}>
-              Load Runtime
+              Load Samples
             </button>
             <button type="button" className="mini-action" disabled={isBusy} onClick={onGenerateRuntimeBuildDraft}>
               Build Runtime
             </button>
           </div>
         </div>
+        {runtimeDraft && draft ? (
+          <div className="sampling-query-preview">
+            <div className="sampling-query-preview-title">
+              <span>Query values</span>
+              <span>{`${samplingQueryFeatureValues.filter((entry) => entry.value !== null).length}/${samplingQueryFeatureValues.length} ready`}</span>
+            </div>
+            <div className="sampling-query-preview-list">
+              {samplingQueryFeatureValues.slice(0, 10).map((entry) => (
+                <span key={entry.name} className={entry.value === null ? 'missing' : ''}>
+                  <strong>{entry.name}</strong>
+                  {entry.value === null ? 'missing' : formatNumber(entry.value)}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {runtimeDraft ? (
           matcherPreview.length ? (
             <div className="sampling-match-list">
-              {matcherPreview.map((match, index) => (
-                <button
-                  key={`${match.clipId}-${match.isMirrored ? 'mirror' : 'source'}-${match.frame}`}
-                  type="button"
-                  className={`sampling-match-row ${selectedMatchKey === samplingMatcherPreviewKey(match) ? 'active' : ''}`}
-                  title={`${match.matchedFeatureCount} feature channels compared. ${formatSamplingScoreBreakdown(match)}. Double click opens the clip frame.`}
-                  onClick={() => onPreviewMatch(match)}
-                  onDoubleClick={() => onSelectMatch(match)}
-                >
-                  <span>{index + 1}</span>
-                  <strong>{`${match.clipName}${match.isMirrored ? ' Mirror' : ''}`}</strong>
-                  <span>{`F${match.frame + 1}`}</span>
-                  <span>{formatNumber(match.score)}</span>
-                  <span className="sampling-match-breakdown">{formatSamplingScoreBreakdown(match)}</span>
-                </button>
-              ))}
+              {matcherPreview.map((match) => {
+                const matchedSample = runtimeSampleLookup.get(runtimeDatabaseSampleKey(match))
+                return (
+                  <button
+                    key={`${match.pointFrame}-${match.clipId}-${match.isMirrored ? 'mirror' : 'source'}-${match.frame}`}
+                    type="button"
+                    className={`sampling-match-row ${selectedMatchKey === samplingMatcherPreviewKey(match) ? 'active' : ''}`}
+                    title={`${match.matchedFeatureCount} feature channels compared. ${formatSamplingScoreBreakdown(match)}. Double click opens the clip frame.`}
+                    onClick={() => onPreviewMatch(match)}
+                    onDoubleClick={() => onSelectMatch(match)}
+                  >
+                    <span>{`+${match.pointFrame}f / ${formatSamplingFrameSeconds(match.pointFrame)}`}</span>
+                    <strong>{`${match.clipName}${match.isMirrored ? ' Mirror' : ''}`}</strong>
+                    <span>{`F${match.frame + 1}${matchedSample ? ` / ${formatNumber(matchedSample.seconds)}s` : ''}`}</span>
+                    <span>{formatNumber(match.score)}</span>
+                    <span className="sampling-match-breakdown">{formatSamplingScoreBreakdown(match)}</span>
+                  </button>
+                )
+              })}
             </div>
           ) : (
             <p className="muted">
@@ -3648,7 +4407,7 @@ function SamplingInspector({
             </p>
           )
         ) : (
-          <p className="muted">{hasRuntimeDraft ? 'Load Runtime to show existing matcher rows' : 'Build Runtime first to create matcher rows'}</p>
+          <p className="muted">{hasRuntimeDraft ? 'Load Samples to show matcher rows' : 'Build Runtime first to create samples'}</p>
         )}
       </section>
       <button type="button" className="inspector-action" disabled title="Export comes after generated sample recipes">

@@ -114,7 +114,8 @@
       "additionalProperties": false,
       "required": [
         "sampleFrameStep",
-        "scaleMode"
+        "scaleMode",
+        "trajectoryPredictionFrames"
       ],
       "properties": {
         "sampleFrameStep": {
@@ -128,6 +129,16 @@
             "source_x0_01",
             "character_x1"
           ]
+        },
+        "trajectoryPredictionFrames": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "minItems": 1,
+          "uniqueItems": true
         }
       }
     }
