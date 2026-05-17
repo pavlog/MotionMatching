@@ -102,6 +102,19 @@
                 },
                 "direction": {
                   "$ref": "#/$defs/vector3"
+                },
+                "speedMode": {
+                  "enum": [
+                    "auto",
+                    "manual"
+                  ]
+                },
+                "speed": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0
                 }
               }
             }

@@ -39,7 +39,9 @@ public sealed record SamplingCapsuleResponse(
 public sealed record SamplingTrajectoryPointResponse(
     int FrameOffset,
     IReadOnlyList<double> Position,
-    IReadOnlyList<double> Direction);
+    IReadOnlyList<double> Direction,
+    string SpeedMode,
+    double? Speed);
 
 public sealed record ClipResponse(
     string Id,
@@ -359,7 +361,9 @@ public sealed record SamplingCapsuleUpdateRequest(
 public sealed record SamplingTrajectoryPointUpdateRequest(
     int? FrameOffset,
     IReadOnlyList<double>? Position,
-    IReadOnlyList<double>? Direction);
+    IReadOnlyList<double>? Direction,
+    string? SpeedMode,
+    double? Speed);
 
 public sealed record RuntimeBuildSettingsRequest(
     int SampleFrameStep,

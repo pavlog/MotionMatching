@@ -44,6 +44,8 @@ export interface SamplingTrajectoryPointResponse {
   frameOffset: number
   position: number[]
   direction: number[]
+  speedMode: 'auto' | 'manual'
+  speed: number | null
 }
 
 export interface SamplingQueryUpdateRequest {

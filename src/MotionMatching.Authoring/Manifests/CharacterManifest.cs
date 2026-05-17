@@ -58,6 +58,10 @@ public sealed record SamplingTrajectoryPointManifest
     public double[] Position { get; init; } = [0, 0, 0];
 
     public double[] Direction { get; init; } = [0, 0, 1];
+
+    public string SpeedMode { get; init; } = "auto";
+
+    public double? Speed { get; init; }
 }
 
 public sealed record RuntimeBuildSettings

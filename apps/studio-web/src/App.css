@@ -1132,7 +1132,7 @@
 
 .sampling-trajectory-row {
   display: grid;
-  grid-template-columns: minmax(50px, 0.75fr) minmax(54px, 1fr) minmax(54px, 1fr) minmax(68px, auto);
+  grid-template-columns: minmax(48px, 0.72fr) minmax(50px, 0.9fr) minmax(50px, 0.9fr) minmax(92px, auto);
   gap: 4px;
   align-items: end;
   padding: 5px;
@@ -1201,6 +1201,30 @@
   font-size: 10px;
   font-weight: 650;
   white-space: nowrap;
+}
+
+.sampling-speed-controls {
+  display: grid;
+  grid-template-columns: minmax(43px, 0.85fr) minmax(46px, 1fr);
+  gap: 3px;
+}
+
+.sampling-speed-controls select,
+.sampling-speed-controls input {
+  width: 100%;
+  min-width: 0;
+  height: 23px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-0);
+  background: var(--surface-1);
+  font-size: 10px;
+}
+
+.sampling-speed-controls input:disabled {
+  color: var(--text-2);
+  opacity: 1;
 }
 
 .sampling-name-line {

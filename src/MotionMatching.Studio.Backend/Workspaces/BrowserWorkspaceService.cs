@@ -799,7 +799,9 @@ public sealed class BrowserWorkspaceService
                 sampling.Trajectory.Select(point => new SamplingTrajectoryPointResponse(
                     point.FrameOffset,
                     point.Position,
-                    point.Direction)).ToArray()))
+                    point.Direction,
+                    NormalizeSamplingSpeedMode(point.SpeedMode),
+                    point.Speed)).ToArray()))
             .ToArray();
     }
 
@@ -876,13 +878,30 @@ public sealed class BrowserWorkspaceService
 
         return request
             .Take(12)
-            .Select((point, index) => new SamplingTrajectoryPointManifest
+            .Select((point, index) =>
             {
-                FrameOffset = Math.Clamp(point.FrameOffset ?? fallback.ElementAtOrDefault(index)?.FrameOffset ?? (index + 1) * 20, 1, 10000),
-                Position = NormalizeVector3(point.Position, fallback.ElementAtOrDefault(index)?.Position ?? [0, 0, 0]),
-                Direction = NormalizeVector3(point.Direction, fallback.ElementAtOrDefault(index)?.Direction ?? [0, 0, 1])
+                var fallbackPoint = fallback.ElementAtOrDefault(index);
+                var speedMode = NormalizeSamplingSpeedMode(point.SpeedMode ?? fallbackPoint?.SpeedMode);
+                return new SamplingTrajectoryPointManifest
+                {
+                    FrameOffset = Math.Clamp(point.FrameOffset ?? fallbackPoint?.FrameOffset ?? (index + 1) * 20, 1, 10000),
+                    Position = NormalizeVector3(point.Position, fallbackPoint?.Position ?? [0, 0, 0]),
+                    Direction = NormalizeVector3(point.Direction, fallbackPoint?.Direction ?? [0, 0, 1]),
+                    SpeedMode = speedMode,
+                    Speed = speedMode == "manual" ? NormalizeOptionalSpeed(point.Speed ?? fallbackPoint?.Speed) : null
+                };
             })
             .ToList();
+    }
+
+    private static string NormalizeSamplingSpeedMode(string? value)
+    {
+        return string.Equals(value, "manual", StringComparison.OrdinalIgnoreCase) ? "manual" : "auto";
+    }
+
+    private static double? NormalizeOptionalSpeed(double? value)
+    {
+        return value is null ? null : Math.Clamp(NormalizeFinite(value.Value), 0, 100000);
     }
 
     private static double NormalizeFinite(double value)

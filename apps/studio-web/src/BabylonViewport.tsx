@@ -1167,6 +1167,16 @@ function createSamplingPreview(
     marker.metadata = { samplingTrajectoryIndex: index }
     meshes.push(marker)
 
+    const hitMarker = MeshBuilder.CreateSphere(`sampling-trajectory-point-hit-${index + 1}`, {
+      diameter: 18,
+      segments: 12,
+    }, scene)
+    hitMarker.position = point
+    hitMarker.isPickable = true
+    hitMarker.visibility = 0
+    hitMarker.metadata = { samplingTrajectoryIndex: index }
+    meshes.push(hitMarker)
+
     const frameOffset = samplingQuery?.trajectory[index]?.frameOffset ?? (index + 1) * 20
     meshes.push(createSamplingLabel(scene, `+${frameOffset}f`, point.add(new Vector3(0, 9, 0)), `sampling-trajectory-label-${index}`))
     if (samplingQuery?.trajectory[index]) {
@@ -1279,8 +1289,14 @@ function buildSamplingTrajectoryPointSpeeds(trajectory: SamplingTrajectoryPoint[
   const byIndex: number[] = Array.from({ length: trajectory.length }, () => 0)
   const byIndexVelocity: Vector3[] = Array.from({ length: trajectory.length }, () => Vector3.Zero())
   const points = [
-    { frameOffset: 0, position: [0, 0, 0], sourceIndex: -1 },
-    ...sortedTrajectory.map(({ point, index }) => ({ frameOffset: point.frameOffset, position: point.position, sourceIndex: index })),
+    { frameOffset: 0, position: [0, 0, 0], speedMode: 'auto', speed: null, sourceIndex: -1 },
+    ...sortedTrajectory.map(({ point, index }) => ({
+      frameOffset: point.frameOffset,
+      position: point.position,
+      speedMode: point.speedMode,
+      speed: point.speed,
+      sourceIndex: index,
+    })),
   ]
 
   let origin = 0
@@ -1288,39 +1304,47 @@ function buildSamplingTrajectoryPointSpeeds(trajectory: SamplingTrajectoryPoint[
   for (const [index, point] of points.entries()) {
     const previous = points[index - 1]
     const next = points[index + 1]
-    const speed = previous && next
-      ? calculateSamplingSegmentSpeed(previous.frameOffset, previous.position, next.frameOffset, next.position, samplingFrameRate)
+    const autoSpeed = previous
+      ? calculateSamplingSegmentSpeed(previous.frameOffset, previous.position, point.frameOffset, point.position, samplingFrameRate)
       : next
         ? calculateSamplingSegmentSpeed(point.frameOffset, point.position, next.frameOffset, next.position, samplingFrameRate)
-        : previous
-          ? calculateSamplingSegmentSpeed(previous.frameOffset, previous.position, point.frameOffset, point.position, samplingFrameRate)
-          : 0
+        : 0
+    const speed = point.sourceIndex >= 0 ? resolveSamplingPointSpeed(point, autoSpeed) : autoSpeed
+    const velocity = calculateSamplingPointVelocityVector(point, previous, next, speed)
     if (point.sourceIndex < 0) {
       origin = speed
-      originVelocity = calculateSamplingSegmentVelocityVector(point, previous, next, samplingFrameRate)
+      originVelocity = velocity
     } else {
       byIndex[point.sourceIndex] = speed
-      byIndexVelocity[point.sourceIndex] = calculateSamplingSegmentVelocityVector(point, previous, next, samplingFrameRate)
+      byIndexVelocity[point.sourceIndex] = velocity
     }
   }
 
   return { origin, originVelocity, byIndex, byIndexVelocity }
 }
 
-function calculateSamplingSegmentVelocityVector(
+function calculateSamplingPointVelocityVector(
   point: { frameOffset: number; position: number[] },
   previous: { frameOffset: number; position: number[] } | undefined,
   next: { frameOffset: number; position: number[] } | undefined,
-  samplingFrameRate: number,
+  speed: number,
 ) {
-  const fromPoint = previous && next ? previous : previous ?? point
-  const toPoint = previous && next ? next : next ?? point
-  const seconds = Math.max(toPoint.frameOffset - fromPoint.frameOffset, 1) / Math.max(samplingFrameRate, 1)
-  return new Vector3(
-    ((toPoint.position[0] ?? 0) - (fromPoint.position[0] ?? 0)) / seconds,
+  const fromPoint = previous ?? point
+  const toPoint = previous ? point : next ?? point
+  const direction = new Vector3(
+    (toPoint.position[0] ?? 0) - (fromPoint.position[0] ?? 0),
     0,
-    ((toPoint.position[2] ?? 0) - (fromPoint.position[2] ?? 0)) / seconds,
+    (toPoint.position[2] ?? 0) - (fromPoint.position[2] ?? 0),
   )
+  return direction.lengthSquared() > 0.0001 ? direction.normalize().scale(speed) : Vector3.Zero()
+}
+
+function resolveSamplingPointSpeed(point: { frameOffset?: number; speedMode?: string; speed?: number | null }, autoSpeed: number) {
+  if (point.speedMode === 'manual' && point.speed !== null && point.speed !== undefined && Number.isFinite(point.speed)) {
+    return Math.max(point.speed, 0)
+  }
+
+  return autoSpeed
 }
 
 function createSamplingQueryVectors(
@@ -1617,6 +1641,8 @@ function insertSamplingTrajectoryPointOnSegment(trajectory: SamplingTrajectoryPo
       Number(projected.z.toFixed(2)),
     ],
     direction: previousPoint?.direction ?? nextPoint.direction,
+    speedMode: 'auto' as const,
+    speed: null,
   }
 
   return [
@@ -1635,6 +1661,8 @@ function midpointSamplingTrajectoryPoint(current: SamplingTrajectoryPoint, next:
       Number((((current.position[2] ?? 0) + (next.position[2] ?? 0)) * 0.5).toFixed(2)),
     ],
     direction: current.direction,
+    speedMode: 'auto' as const,
+    speed: null,
   }
 }
 
@@ -1654,6 +1682,8 @@ function extrapolateSamplingTrajectoryPoint(
         Number(((current.position[2] ?? 0) + ((current.position[2] ?? 0) - (previous.position[2] ?? 0))).toFixed(2)),
       ],
       direction: current.direction,
+      speedMode: 'auto' as const,
+      speed: null,
     }
   }
 
@@ -1667,6 +1697,8 @@ function extrapolateSamplingTrajectoryPoint(
       Number(((current.position[2] ?? 0) + (facing[2] ?? 1) * 100 * seconds).toFixed(2)),
     ],
     direction: current.direction,
+    speedMode: 'auto' as const,
+    speed: null,
   }
 }
 

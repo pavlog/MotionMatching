@@ -2924,13 +2924,13 @@ function sortSamplingTrajectoryByFrame(trajectory: SamplingQueryResponse['trajec
 }
 
 function sampleSamplingVelocityAtFrame(trajectory: SamplingQueryResponse['trajectory'], frame: number) {
-  const keyframes = buildSamplingVelocityKeyframes(trajectory)
+  const keyframes = buildSamplingSpeedKeyframes(trajectory)
   if (!keyframes.length) {
     return [0, 0, 0]
   }
 
   if (frame <= keyframes[0].frameOffset) {
-    return roundVelocity(keyframes[0].velocity)
+    return samplingVelocityFromSpeedKeyframe(keyframes[0])
   }
 
   for (let index = 1; index < keyframes.length; index += 1) {
@@ -2938,23 +2938,41 @@ function sampleSamplingVelocityAtFrame(trajectory: SamplingQueryResponse['trajec
     const next = keyframes[index]
     if (frame <= next.frameOffset) {
       const ratio = (frame - previous.frameOffset) / Math.max(next.frameOffset - previous.frameOffset, 1)
-      return roundVelocity([
-        lerp(previous.velocity[0] ?? 0, next.velocity[0] ?? 0, ratio),
-        0,
-        lerp(previous.velocity[2] ?? 0, next.velocity[2] ?? 0, ratio),
-      ])
+      const speed = lerp(previous.speed, next.speed, ratio)
+      const direction = normalizeVector2(
+        lerp(previous.direction[0] ?? 0, next.direction[0] ?? 0, ratio),
+        lerp(previous.direction[2] ?? 0, next.direction[2] ?? 0, ratio),
+      )
+      return roundVelocity([direction.x * speed, 0, direction.z * speed])
     }
   }
 
-  return roundVelocity(keyframes.at(-1)?.velocity ?? [0, 0, 0])
+  return samplingVelocityFromSpeedKeyframe(keyframes.at(-1) ?? null)
 }
 
 function samplingSpeedAtFrame(trajectory: SamplingQueryResponse['trajectory'], frame: number) {
-  const velocity = sampleSamplingVelocityAtFrame(trajectory, frame)
-  return Math.hypot(velocity[0] ?? 0, velocity[2] ?? 0)
+  const keyframes = buildSamplingSpeedKeyframes(trajectory)
+  if (!keyframes.length) {
+    return 0
+  }
+
+  if (frame <= keyframes[0].frameOffset) {
+    return keyframes[0].speed
+  }
+
+  for (let index = 1; index < keyframes.length; index += 1) {
+    const previous = keyframes[index - 1]
+    const next = keyframes[index]
+    if (frame <= next.frameOffset) {
+      const ratio = (frame - previous.frameOffset) / Math.max(next.frameOffset - previous.frameOffset, 1)
+      return lerp(previous.speed, next.speed, ratio)
+    }
+  }
+
+  return keyframes.at(-1)?.speed ?? 0
 }
 
-function buildSamplingVelocityKeyframes(trajectory: SamplingQueryResponse['trajectory']) {
+function buildSamplingSpeedKeyframes(trajectory: SamplingQueryResponse['trajectory']) {
   const points = [
     { frameOffset: 0, position: [0, 0, 0] },
     ...sortSamplingTrajectoryByFrame(trajectory),
@@ -2963,44 +2981,80 @@ function buildSamplingVelocityKeyframes(trajectory: SamplingQueryResponse['traje
   return points.map((point, index) => {
     const previous = points[index - 1]
     const next = points[index + 1]
-    if (previous && next) {
+    if (previous) {
+      const autoSpeed = calculateSamplingSegmentSpeed(previous, point, fallbackFrameRate)
       return {
         frameOffset: point.frameOffset,
-        velocity: calculateSamplingPointVelocity(previous, next),
+        speed: resolveSamplingPointSpeed(point, autoSpeed),
+        direction: calculateSamplingPointDirection(previous, point),
       }
     }
 
     if (next) {
+      const autoSpeed = calculateSamplingSegmentSpeed(point, next, fallbackFrameRate)
       return {
         frameOffset: point.frameOffset,
-        velocity: calculateSamplingPointVelocity(point, next),
+        speed: resolveSamplingPointSpeed(point, autoSpeed),
+        direction: calculateSamplingPointDirection(point, next),
       }
     }
 
     if (previous) {
       return {
         frameOffset: point.frameOffset,
-        velocity: calculateSamplingPointVelocity(previous, point),
+        speed: calculateSamplingSegmentSpeed(previous, point, fallbackFrameRate),
+        direction: calculateSamplingPointDirection(previous, point),
       }
     }
 
     return {
       frameOffset: point.frameOffset,
-      velocity: [0, 0, 0],
+      speed: 0,
+      direction: [0, 0, 1],
     }
   })
 }
 
-function calculateSamplingPointVelocity(
+function resolveSamplingPointSpeed(point: { frameOffset?: number; speedMode?: string; speed?: number | null }, autoSpeed: number) {
+  if (point.speedMode === 'manual' && point.speed !== null && point.speed !== undefined && Number.isFinite(point.speed)) {
+    return Math.max(point.speed, 0)
+  }
+
+  return autoSpeed
+}
+
+function calculateSamplingSegmentSpeed(
   fromPoint: { frameOffset: number; position: number[] },
   toPoint: { frameOffset: number; position: number[] },
+  frameRate: number,
 ) {
-  const seconds = Math.max(toPoint.frameOffset - fromPoint.frameOffset, 1) / fallbackFrameRate
-  return [
-    ((toPoint.position[0] ?? 0) - (fromPoint.position[0] ?? 0)) / seconds,
+  const seconds = Math.max(toPoint.frameOffset - fromPoint.frameOffset, 1) / frameRate
+  const dx = (toPoint.position[0] ?? 0) - (fromPoint.position[0] ?? 0)
+  const dz = (toPoint.position[2] ?? 0) - (fromPoint.position[2] ?? 0)
+  return Math.hypot(dx, dz) / seconds
+}
+
+function calculateSamplingPointDirection(
+  fromPoint: { position: number[] },
+  toPoint: { position: number[] },
+) {
+  const direction = normalizeVector2(
+    (toPoint.position[0] ?? 0) - (fromPoint.position[0] ?? 0),
+    (toPoint.position[2] ?? 0) - (fromPoint.position[2] ?? 0),
+  )
+  return [direction.x, 0, direction.z]
+}
+
+function samplingVelocityFromSpeedKeyframe(keyframe: { speed: number; direction: number[] } | null) {
+  if (!keyframe) {
+    return [0, 0, 0]
+  }
+
+  return roundVelocity([
+    (keyframe.direction[0] ?? 0) * keyframe.speed,
     0,
-    ((toPoint.position[2] ?? 0) - (fromPoint.position[2] ?? 0)) / seconds,
-  ]
+    (keyframe.direction[2] ?? 0) * keyframe.speed,
+  ])
 }
 
 function roundVelocity(velocity: number[]) {
@@ -3033,6 +3087,8 @@ function extrapolateTrajectoryPoint(
         Number(((sourcePoint.position[2] ?? 0) + ((sourcePoint.position[2] ?? 0) - (previousPoint.position[2] ?? 0))).toFixed(2)),
       ],
       direction: sourcePoint.direction,
+      speedMode: 'auto' as const,
+      speed: null,
     }
   }
 
@@ -3046,6 +3102,8 @@ function extrapolateTrajectoryPoint(
       Number(((sourcePoint.position[2] ?? 0) + (facing[2] ?? 1) * 100 * seconds).toFixed(2)),
     ],
     direction: sourcePoint.direction,
+    speedMode: 'auto' as const,
+    speed: null,
   }
 }
 
@@ -3132,7 +3190,7 @@ function findClosestPoseSample(samples: RuntimePoseSampleResponse[], targetFrame
   }, null)
 }
 
-function getSamplingPointHeading(points: SamplingQueryResponse['trajectory'], index: number, fallback: number[]) {
+function getSamplingPointHeading(points: Array<{ position: number[] }>, index: number, fallback: number[]) {
   const point = points[index]
   const nextPoint = points[index + 1]
   const previousPoint = points[index - 1]
@@ -4180,6 +4238,48 @@ function SamplingInspector({
     })
   }
 
+  function updateTrajectorySpeedMode(index: number, speedMode: 'auto' | 'manual') {
+    updateDraft((current) => {
+      const trajectory = current.trajectory.map((point, pointIndex) => {
+        if (pointIndex !== index) {
+          return point
+        }
+
+        return {
+          ...point,
+          speedMode,
+          speed: speedMode === 'manual'
+            ? point.speed ?? samplingSpeedAtFrame(current.trajectory, point.frameOffset)
+            : null,
+        }
+      })
+
+      return {
+        ...current,
+        velocity: deriveSamplingVelocityFromTrajectory(trajectory),
+        trajectory,
+      }
+    })
+  }
+
+  function updateTrajectorySpeed(index: number, value: number) {
+    updateDraft((current) => {
+      const trajectory = current.trajectory.map((point, pointIndex) => pointIndex === index
+        ? {
+            ...point,
+            speedMode: 'manual' as const,
+            speed: Number.isFinite(value) ? Math.max(value, 0) : 0,
+          }
+        : point)
+
+      return {
+        ...current,
+        velocity: deriveSamplingVelocityFromTrajectory(trajectory),
+        trajectory,
+      }
+    })
+  }
+
   function saveSampling() {
     if (!draft) {
       return
@@ -4225,6 +4325,8 @@ function SamplingInspector({
           frameOffset: nextFrame,
           position: nextPosition,
           direction: current.facing,
+          speedMode: 'auto' as const,
+          speed: null,
         },
       ]
 
@@ -4256,6 +4358,8 @@ function SamplingInspector({
               Number((((sourcePoint.position[2] ?? 0) + (nextPoint.position[2] ?? 0)) * 0.5).toFixed(2)),
             ],
             direction: sourcePoint.direction,
+            speedMode: 'auto' as const,
+            speed: null,
           }
         : extrapolateTrajectoryPoint(sourcePoint, previousPoint, current.facing)
 
@@ -4434,7 +4538,28 @@ function SamplingInspector({
                   </div>
                   <div className="sampling-trajectory-speed">
                     <span>{formatSamplingFrameTime(point.frameOffset)}</span>
-                    <strong>{`${formatNumber(trajectoryPointSpeed(index))} cm/s`}</strong>
+                    <div className="sampling-speed-controls">
+                      <select
+                        value={point.speedMode ?? 'auto'}
+                        aria-label={`Speed mode for trajectory point ${index + 1}`}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => updateTrajectorySpeedMode(index, event.target.value === 'manual' ? 'manual' : 'auto')}
+                      >
+                        <option value="auto">Auto</option>
+                        <option value="manual">Manual</option>
+                      </select>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        disabled={(point.speedMode ?? 'auto') !== 'manual'}
+                        value={Number(((point.speedMode === 'manual' ? point.speed ?? trajectoryPointSpeed(index) : trajectoryPointSpeed(index))).toFixed(2))}
+                        aria-label={`Speed for trajectory point ${index + 1}`}
+                        onClick={(event) => event.stopPropagation()}
+                        onFocus={() => onSamplingPointSelect(index)}
+                        onChange={(event) => updateTrajectorySpeed(index, Number(event.target.value) || 0)}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
