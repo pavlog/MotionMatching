@@ -107,6 +107,7 @@ type SamplingMatcherPreviewMatch = {
     trajectoryDirection: number
     other: number
   }
+  contributions: Array<{ name: string; delta: number; score: number }>
   matchedFeatureCount: number
 }
 type RuntimeQueryContractFeature = {
@@ -160,6 +161,7 @@ function App() {
   const [samplingPreviewFrame, setSamplingPreviewFrame] = useState(0)
   const [samplingGhostingMode, setSamplingGhostingMode] = useState<SamplingGhostingMode>('none')
   const [showSamplingQueryVectors, setShowSamplingQueryVectors] = useState(false)
+  const [selectedSamplingPointIndex, setSelectedSamplingPointIndex] = useState<number | null>(null)
   const [loopStartFrame, setLoopStartFrame] = useState(0)
   const [loopEndFrame, setLoopEndFrame] = useState(-1)
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false)
@@ -219,6 +221,12 @@ function App() {
   const activeSamplingPreviewMatch = selectedSamplingMatch ?? samplingMatcherPreview[0] ?? null
   const hasSamplingPreviewTimeline = Boolean(hasSamplingTimeline && activeSamplingPreviewMatch)
   const hasBottomTimeline = Boolean(selectedClip || hasSamplingTimeline)
+  const visibleSelectedSamplingPointIndex = selectedSamplingPointIndex !== null && visibleSampling?.trajectory[selectedSamplingPointIndex]
+    ? selectedSamplingPointIndex
+    : null
+  const selectedSamplingPointFrame = visibleSelectedSamplingPointIndex !== null
+    ? visibleSampling?.trajectory[visibleSelectedSamplingPointIndex]?.frameOffset ?? null
+    : null
   const samplingQueryVectorFrames = useMemo(() => {
     const runtimeDraft = lastRuntimeDraft
     const runtimeFrames = runtimeDraft && runtimeDraft.characterId === selectedCharacter?.id
@@ -1264,6 +1272,8 @@ function App() {
           samplingPreviewFrame={visibleSamplingPreviewFrame}
           samplingQueryVectorFrames={samplingQueryVectorFrames}
           showSamplingQueryVectors={isSamplingPreviewActive && showSamplingQueryVectors}
+          selectedSamplingPointIndex={visibleSelectedSamplingPointIndex}
+          onSamplingPointSelect={setSelectedSamplingPointIndex}
           label={selectedClip ? `${selectedCharacter?.name ?? 'Character'} / ${selectedClip.name}` : selectedCharacter?.name ?? 'Empty scene'}
           onClipMotionModeChange={setClipMotionMode}
           onAnimationStateChange={setAnimationPreviewState}
@@ -1322,6 +1332,8 @@ function App() {
             selectedMatcherKey={selectedSamplingMatch ? samplingMatcherPreviewKey(selectedSamplingMatch) : null}
             onPreviewMatcherSample={previewMatcherSample}
             onSelectMatcherSample={(match) => selectMatcherSample(selectedCharacter.id, match)}
+            selectedSamplingPointIndex={visibleSelectedSamplingPointIndex}
+            onSamplingPointSelect={setSelectedSamplingPointIndex}
           />
         ) : (
           <div className="inspector-empty">
@@ -1370,6 +1382,7 @@ function App() {
             isPlaying={isTimelinePlaying && hasSamplingPreviewTimeline}
             footContacts={null}
             markerFrames={visibleSampling?.trajectory.map((point) => point.frameOffset) ?? []}
+            activeMarkerFrame={selectedSamplingPointFrame}
             ghostingMode={samplingGhostingMode}
             onGhostingModeChange={setSamplingGhostingMode}
             showQueryVectors={showSamplingQueryVectors}
@@ -2164,6 +2177,7 @@ function TimelinePanel({
   isPlaying,
   footContacts,
   markerFrames = [],
+  activeMarkerFrame,
   ghostingMode,
   onGhostingModeChange,
   showQueryVectors,
@@ -2188,6 +2202,7 @@ function TimelinePanel({
   isPlaying: boolean
   footContacts: ClipResponse['footContacts']
   markerFrames?: number[]
+  activeMarkerFrame?: number | null
   ghostingMode?: SamplingGhostingMode
   onGhostingModeChange?: (mode: SamplingGhostingMode) => void
   showQueryVectors?: boolean
@@ -2379,7 +2394,7 @@ function TimelinePanel({
         {timelineMarkers.map((marker) => (
           <div
             key={`marker-${marker.frame}`}
-            className="timeline-sampling-marker"
+            className={`timeline-sampling-marker ${activeMarkerFrame === marker.frame ? 'active' : ''}`}
             style={{ left: marker.left }}
             aria-hidden="true"
           />
@@ -2901,21 +2916,99 @@ function updateVectorValue(values: number[], index: number, value: number) {
 }
 
 function deriveSamplingVelocityFromTrajectory(trajectory: SamplingQueryResponse['trajectory']) {
-  const firstPoint = sortSamplingTrajectoryByFrame(trajectory)[0]
-  if (!firstPoint) {
-    return [0, 0, 0]
-  }
-
-  const seconds = Math.max(firstPoint.frameOffset, 1) / fallbackFrameRate
-  return [
-    Number(((firstPoint.position[0] ?? 0) / seconds).toFixed(2)),
-    0,
-    Number(((firstPoint.position[2] ?? 0) / seconds).toFixed(2)),
-  ]
+  return sampleSamplingVelocityAtFrame(trajectory, 0)
 }
 
 function sortSamplingTrajectoryByFrame(trajectory: SamplingQueryResponse['trajectory']) {
   return [...trajectory].sort((left, right) => left.frameOffset - right.frameOffset)
+}
+
+function sampleSamplingVelocityAtFrame(trajectory: SamplingQueryResponse['trajectory'], frame: number) {
+  const keyframes = buildSamplingVelocityKeyframes(trajectory)
+  if (!keyframes.length) {
+    return [0, 0, 0]
+  }
+
+  if (frame <= keyframes[0].frameOffset) {
+    return roundVelocity(keyframes[0].velocity)
+  }
+
+  for (let index = 1; index < keyframes.length; index += 1) {
+    const previous = keyframes[index - 1]
+    const next = keyframes[index]
+    if (frame <= next.frameOffset) {
+      const ratio = (frame - previous.frameOffset) / Math.max(next.frameOffset - previous.frameOffset, 1)
+      return roundVelocity([
+        lerp(previous.velocity[0] ?? 0, next.velocity[0] ?? 0, ratio),
+        0,
+        lerp(previous.velocity[2] ?? 0, next.velocity[2] ?? 0, ratio),
+      ])
+    }
+  }
+
+  return roundVelocity(keyframes.at(-1)?.velocity ?? [0, 0, 0])
+}
+
+function samplingSpeedAtFrame(trajectory: SamplingQueryResponse['trajectory'], frame: number) {
+  const velocity = sampleSamplingVelocityAtFrame(trajectory, frame)
+  return Math.hypot(velocity[0] ?? 0, velocity[2] ?? 0)
+}
+
+function buildSamplingVelocityKeyframes(trajectory: SamplingQueryResponse['trajectory']) {
+  const points = [
+    { frameOffset: 0, position: [0, 0, 0] },
+    ...sortSamplingTrajectoryByFrame(trajectory),
+  ]
+
+  return points.map((point, index) => {
+    const previous = points[index - 1]
+    const next = points[index + 1]
+    if (previous && next) {
+      return {
+        frameOffset: point.frameOffset,
+        velocity: calculateSamplingPointVelocity(previous, next),
+      }
+    }
+
+    if (next) {
+      return {
+        frameOffset: point.frameOffset,
+        velocity: calculateSamplingPointVelocity(point, next),
+      }
+    }
+
+    if (previous) {
+      return {
+        frameOffset: point.frameOffset,
+        velocity: calculateSamplingPointVelocity(previous, point),
+      }
+    }
+
+    return {
+      frameOffset: point.frameOffset,
+      velocity: [0, 0, 0],
+    }
+  })
+}
+
+function calculateSamplingPointVelocity(
+  fromPoint: { frameOffset: number; position: number[] },
+  toPoint: { frameOffset: number; position: number[] },
+) {
+  const seconds = Math.max(toPoint.frameOffset - fromPoint.frameOffset, 1) / fallbackFrameRate
+  return [
+    ((toPoint.position[0] ?? 0) - (fromPoint.position[0] ?? 0)) / seconds,
+    0,
+    ((toPoint.position[2] ?? 0) - (fromPoint.position[2] ?? 0)) / seconds,
+  ]
+}
+
+function roundVelocity(velocity: number[]) {
+  return [
+    Number((velocity[0] ?? 0).toFixed(2)),
+    0,
+    Number((velocity[2] ?? 0).toFixed(2)),
+  ]
 }
 
 function normalizeSamplingDraftVelocity(query: SamplingQueryResponse): SamplingQueryResponse {
@@ -3139,6 +3232,7 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
             trajectoryDirection: 0,
             other: 0,
           }
+          const contributions: SamplingMatcherPreviewMatch['contributions'] = []
 
           for (const [name, queryValue] of Object.entries(queryFeatures)) {
             const sampleValue = getSamplingSampleFeatureValue(sample.features, name)
@@ -3152,6 +3246,11 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
             score += componentScore
             breakdown[group] += componentScore
             breakdownCounts[group] += 1
+            contributions.push({
+              name,
+              delta,
+              score: Math.sqrt(componentScore),
+            })
             matchedFeatureCount += 1
           }
 
@@ -3165,6 +3264,7 @@ function buildSamplingMatcherPreview(query: SamplingQueryResponse, database: Run
             score: matchedFeatureCount > 0 ? Math.sqrt(score / matchedFeatureCount) : 0,
             breakdown,
             breakdownCounts,
+            contributions: contributions.sort((left, right) => right.score - left.score),
             matchedFeatureCount,
           }
         })
@@ -3210,6 +3310,12 @@ function formatBreakdownGroup(match: SamplingMatcherPreviewMatch, group: keyof S
   return count > 0 ? formatNumber(Math.sqrt(match.breakdown[group] / count)) : '--'
 }
 
+function formatSamplingContributionSummary(match: SamplingMatcherPreviewMatch) {
+  return match.contributions.slice(0, 4)
+    .map((item) => `${item.name} Δ${formatNumber(Math.abs(item.delta))}`)
+    .join('  ')
+}
+
 function countSamplingRoleCandidates(query: SamplingQueryResponse, database: RuntimeDatabaseDraftResponse) {
   if (!query.roleFilter) {
     return database.samples.length
@@ -3225,7 +3331,7 @@ function buildSamplingPointQueryFeatureValues(
   normalizationFactor: number,
 ) {
   const facing = normalizeVector2(query.facing[0] ?? 0, query.facing[2] ?? 1)
-  const derivedVelocity = deriveSamplingVelocityFromTrajectory(query.trajectory)
+  const derivedVelocity = sampleSamplingVelocityAtFrame(query.trajectory, point.frameOffset)
   const velocityX = derivedVelocity[0] ?? 0
   const velocityZ = derivedVelocity[2] ?? 0
   const values: Record<string, number> = {
@@ -3251,7 +3357,7 @@ function buildSamplingContractQueryFeatureValues(
 ) {
   const values = new Map<string, number | null>()
   const facing = normalizeVector2(query.facing[0] ?? 0, query.facing[2] ?? 1)
-  const derivedVelocity = deriveSamplingVelocityFromTrajectory(query.trajectory)
+  const derivedVelocity = sampleSamplingVelocityAtFrame(query.trajectory, 0)
   const velocityX = derivedVelocity[0] ?? 0
   const velocityZ = derivedVelocity[2] ?? 0
 
@@ -3743,6 +3849,8 @@ function CharacterInspector({
   selectedMatcherKey,
   onPreviewMatcherSample,
   onSelectMatcherSample,
+  selectedSamplingPointIndex,
+  onSamplingPointSelect,
 }: {
   character: CharacterResponse
   isBusy: boolean
@@ -3775,6 +3883,8 @@ function CharacterInspector({
   selectedMatcherKey: string | null
   onPreviewMatcherSample: (match: SamplingMatcherPreviewMatch) => void
   onSelectMatcherSample: (match: SamplingMatcherPreviewMatch) => void
+  selectedSamplingPointIndex: number | null
+  onSamplingPointSelect: (index: number | null) => void
 }) {
   const trajectoryFrameSource = runtimeTrajectoryPredictionFrames.join(', ')
   const [trajectoryFrameDraft, setTrajectoryFrameDraft] = useState({ source: trajectoryFrameSource, value: trajectoryFrameSource })
@@ -3919,6 +4029,8 @@ function CharacterInspector({
             selectedMatchKey={selectedMatcherKey}
             onPreviewMatch={onPreviewMatcherSample}
             onSelectMatch={onSelectMatcherSample}
+            selectedSamplingPointIndex={selectedSamplingPointIndex}
+            onSamplingPointSelect={onSamplingPointSelect}
           />
         )}
       </section>
@@ -3966,6 +4078,8 @@ function SamplingInspector({
   selectedMatchKey,
   onPreviewMatch,
   onSelectMatch,
+  selectedSamplingPointIndex,
+  onSamplingPointSelect,
 }: {
   character: CharacterResponse
   sampling: SamplingQueryResponse | null
@@ -3980,6 +4094,8 @@ function SamplingInspector({
   selectedMatchKey: string | null
   onPreviewMatch: (match: SamplingMatcherPreviewMatch) => void
   onSelectMatch: (match: SamplingMatcherPreviewMatch) => void
+  selectedSamplingPointIndex: number | null
+  onSamplingPointSelect: (index: number | null) => void
 }) {
   const runtimeScale = runtimeDraft
     ? `${formatRuntimeScaleMode(runtimeDraft.features.scale.mode)} x${formatNumber(runtimeDraft.features.scale.normalizationFactor)}`
@@ -4093,7 +4209,8 @@ function SamplingInspector({
       const lastPoint = current.trajectory.at(-1)
       const nextFrame = (lastPoint?.frameOffset ?? 0) + 20
       const frameDelta = lastPoint ? nextFrame - lastPoint.frameOffset : nextFrame
-      const velocityOffset = projectVelocityForFrames(deriveSamplingVelocityFromTrajectory(current.trajectory), frameDelta)
+      const sourceVelocity = sampleSamplingVelocityAtFrame(current.trajectory, lastPoint?.frameOffset ?? 0)
+      const velocityOffset = projectVelocityForFrames(sourceVelocity, frameDelta)
       const nextPosition = lastPoint
         ? [
             Number(((lastPoint.position[0] ?? 0) + velocityOffset[0]).toFixed(2)),
@@ -4173,12 +4290,7 @@ function SamplingInspector({
       return 0
     }
 
-    const nextPoint = sortSamplingTrajectoryByFrame(draft.trajectory)[0]
-    if (!nextPoint) {
-      return 0
-    }
-
-    return trajectorySegmentSpeed(0, [0, 0, 0], nextPoint.frameOffset, nextPoint.position)
+    return samplingSpeedAtFrame(draft.trajectory, 0)
   }
 
   function trajectoryPointSpeed(index: number) {
@@ -4191,27 +4303,7 @@ function SamplingInspector({
       return 0
     }
 
-    const sortedTrajectory = sortSamplingTrajectoryByFrame(draft.trajectory)
-    const sortedIndex = sortedTrajectory.findIndex((item) => item === point)
-    const nextPoint = sortedIndex >= 0 ? sortedTrajectory[sortedIndex + 1] : null
-    if (!nextPoint) {
-      return 0
-    }
-
-    return trajectorySegmentSpeed(point.frameOffset, point.position, nextPoint.frameOffset, nextPoint.position)
-  }
-
-  function trajectorySegmentSpeed(
-    fromFrame: number,
-    fromPosition: number[],
-    toFrame: number,
-    toPosition: number[],
-  ) {
-    const frameDelta = Math.max(toFrame - fromFrame, 1)
-    const seconds = frameDelta / fallbackFrameRate
-    const dx = (toPosition[0] ?? 0) - (fromPosition[0] ?? 0)
-    const dz = (toPosition[2] ?? 0) - (fromPosition[2] ?? 0)
-    return Math.hypot(dx, dz) / seconds
+    return samplingSpeedAtFrame(draft.trajectory, point.frameOffset)
   }
 
   return (
@@ -4220,7 +4312,12 @@ function SamplingInspector({
         <dt>Character</dt>
         <dd>{character.name}</dd>
         <dt>Sampling</dt>
-        <dd>{draft?.name ?? 'None'}</dd>
+        <dd>
+          <span className="sampling-name-line">
+            <span>{draft?.name ?? 'None'}</span>
+            {hasChanges ? <strong>Unsaved</strong> : null}
+          </span>
+        </dd>
         <dt>Capsule</dt>
         <dd>{draft ? `Height ${formatNumber(draft.capsule.height)}, radius ${formatNumber(draft.capsule.radius)}` : '--'}</dd>
         <dt>Facing</dt>
@@ -4296,18 +4393,22 @@ function SamplingInspector({
               </div>
             </div>
             {draft.trajectory.map((point, index) => (
-              <div key={`${draft.id}-trajectory-${index}`} className="sampling-trajectory-row">
+              <div
+                key={`${draft.id}-trajectory-${index}`}
+                className={`sampling-trajectory-row ${selectedSamplingPointIndex === index ? 'active' : ''}`}
+                onClick={() => onSamplingPointSelect(index)}
+              >
                 <label className="setting-field">
                   {`F@${defaultSamplingFrameRate}`}
-                  <input type="number" min={1} value={point.frameOffset} onChange={(event) => updateTrajectory(index, 'frameOffset', Number(event.target.value) || 1)} />
+                  <input type="number" min={1} value={point.frameOffset} onFocus={() => onSamplingPointSelect(index)} onChange={(event) => updateTrajectory(index, 'frameOffset', Number(event.target.value) || 1)} />
                 </label>
                 <label className="setting-field">
                   X
-                  <input type="number" step={1} value={point.position[0] ?? 0} onChange={(event) => updateTrajectory(index, 'positionX', Number(event.target.value) || 0)} />
+                  <input type="number" step={1} value={point.position[0] ?? 0} onFocus={() => onSamplingPointSelect(index)} onChange={(event) => updateTrajectory(index, 'positionX', Number(event.target.value) || 0)} />
                 </label>
                 <label className="setting-field">
                   Z
-                  <input type="number" step={1} value={point.position[2] ?? 0} onChange={(event) => updateTrajectory(index, 'positionZ', Number(event.target.value) || 0)} />
+                  <input type="number" step={1} value={point.position[2] ?? 0} onFocus={() => onSamplingPointSelect(index)} onChange={(event) => updateTrajectory(index, 'positionZ', Number(event.target.value) || 0)} />
                 </label>
                 <div className="sampling-trajectory-tools">
                   <div className="sampling-trajectory-actions">
@@ -4386,7 +4487,7 @@ function SamplingInspector({
                     key={`${match.pointFrame}-${match.clipId}-${match.isMirrored ? 'mirror' : 'source'}-${match.frame}`}
                     type="button"
                     className={`sampling-match-row ${selectedMatchKey === samplingMatcherPreviewKey(match) ? 'active' : ''}`}
-                    title={`${match.matchedFeatureCount} feature channels compared. ${formatSamplingScoreBreakdown(match)}. Double click opens the clip frame.`}
+                    title={`${match.matchedFeatureCount} feature channels compared. ${formatSamplingScoreBreakdown(match)}. ${formatSamplingContributionSummary(match)}. Double click opens the clip frame.`}
                     onClick={() => onPreviewMatch(match)}
                     onDoubleClick={() => onSelectMatch(match)}
                   >
@@ -4394,7 +4495,7 @@ function SamplingInspector({
                     <strong>{`${match.clipName}${match.isMirrored ? ' Mirror' : ''}`}</strong>
                     <span>{`F${match.frame + 1}${matchedSample ? ` / ${formatNumber(matchedSample.seconds)}s` : ''}`}</span>
                     <span>{formatNumber(match.score)}</span>
-                    <span className="sampling-match-breakdown">{formatSamplingScoreBreakdown(match)}</span>
+                    <span className="sampling-match-breakdown">{`${formatSamplingScoreBreakdown(match)}  ${formatSamplingContributionSummary(match)}`}</span>
                   </button>
                 )
               })}

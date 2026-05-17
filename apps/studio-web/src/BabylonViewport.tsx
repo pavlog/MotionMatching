@@ -51,10 +51,12 @@ interface BabylonViewportProps {
   samplingPreviewFrame: number
   samplingQueryVectorFrames: number[]
   showSamplingQueryVectors: boolean
+  selectedSamplingPointIndex: number | null
   label: string
   onClipMotionModeChange?: (mode: ClipMotionMode) => void
   onAnimationStateChange?: (state: string) => void
   onSamplingQueryChange?: (query: SamplingQueryResponse) => void
+  onSamplingPointSelect?: (index: number | null) => void
 }
 
 type CameraView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso'
@@ -126,10 +128,12 @@ export function BabylonViewport({
   samplingPreviewFrame,
   samplingQueryVectorFrames,
   showSamplingQueryVectors,
+  selectedSamplingPointIndex,
   label,
   onClipMotionModeChange,
   onAnimationStateChange,
   onSamplingQueryChange,
+  onSamplingPointSelect,
 }: BabylonViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const sceneRef = useRef<Scene | null>(null)
@@ -148,6 +152,7 @@ export function BabylonViewport({
   const samplingDragRef = useRef<SamplingDragState | null>(null)
   const samplingContextClickRef = useRef<SamplingContextClickState | null>(null)
   const onSamplingQueryChangeRef = useRef<typeof onSamplingQueryChange>(onSamplingQueryChange)
+  const onSamplingPointSelectRef = useRef<typeof onSamplingPointSelect>(onSamplingPointSelect)
   const characterPoseRef = useRef(new Map<PoseTarget, PoseSnapshot>())
   const clipScrubRef = useRef({ frame: clipFrame, frameCount: clipFrameCount, frameRate: clipFrameRate, durationSeconds: clipDurationSeconds })
   const [cameraMode, setCameraMode] = useState<'perspective' | 'orthographic'>('perspective')
@@ -210,7 +215,8 @@ export function BabylonViewport({
     samplingPreviewRef.current = samplingPreview
     samplingQueryRef.current = samplingQuery
     onSamplingQueryChangeRef.current = onSamplingQueryChange
-  }, [onSamplingQueryChange, samplingPreview, samplingQuery])
+    onSamplingPointSelectRef.current = onSamplingPointSelect
+  }, [onSamplingPointSelect, onSamplingQueryChange, samplingPreview, samplingQuery])
 
   const applyClipFrame = useCallback((animationGroup: AnimationGroup) => {
     const { frame, frameCount, frameRate } = clipScrubRef.current
@@ -538,6 +544,7 @@ export function BabylonViewport({
         }
 
         if (trajectoryIndex !== null) {
+          onSamplingPointSelectRef.current?.(trajectoryIndex)
           samplingDragRef.current = { kind: 'trajectory', index: trajectoryIndex, marker: pickedMesh }
           camera.detachControl()
           pointerInfo.event.preventDefault()
@@ -880,8 +887,9 @@ export function BabylonViewport({
       samplingPreviewFrame,
       showSamplingQueryVectors,
       samplingQueryVectorFrames,
+      selectedSamplingPointIndex,
     )
-  }, [modelVersion, samplingFrameRate, samplingPreview, samplingPreviewFrame, samplingQuery, samplingQueryVectorFrames, showSamplingQueryVectors])
+  }, [modelVersion, samplingFrameRate, samplingPreview, samplingPreviewFrame, samplingQuery, samplingQueryVectorFrames, selectedSamplingPointIndex, showSamplingQueryVectors])
 
   useEffect(() => {
     const scene = sceneRef.current
@@ -1024,6 +1032,7 @@ function createSamplingPreview(
   samplingPreviewFrame: number,
   showQueryVectors: boolean,
   queryVectorFrames: number[],
+  selectedPointIndex: number | null,
 ) {
   const meshes: Mesh[] = []
   const capsuleMaterial = new StandardMaterial('sampling-capsule-material', scene)
@@ -1054,6 +1063,10 @@ function createSamplingPreview(
   insertSegmentMaterial.alpha = 0.08
   insertSegmentMaterial.transparencyMode = Material.MATERIAL_ALPHABLEND
   insertSegmentMaterial.disableDepthWrite = true
+
+  const selectedPointMaterial = new StandardMaterial('sampling-selected-trajectory-material', scene)
+  selectedPointMaterial.diffuseColor = new Color3(0.36, 0.72, 1)
+  selectedPointMaterial.emissiveColor = new Color3(0.1, 0.28, 0.5)
 
   const capsuleHeight = Math.max(samplingQuery?.capsule.height ?? 72, 1)
   const capsuleRadius = Math.max(samplingQuery?.capsule.radius ?? 14, 1)
@@ -1121,8 +1134,20 @@ function createSamplingPreview(
         new Vector3(18, 2, 96),
       ]
   const trajectory = samplingQuery?.trajectory ?? []
-  const trajectorySpeeds = buildSamplingTrajectoryOutgoingSpeeds(trajectory, samplingFrameRate)
+  const trajectorySpeeds = buildSamplingTrajectoryPointSpeeds(trajectory, samplingFrameRate)
   if (trajectory.length) {
+    const originVelocity = trajectorySpeeds.originVelocity
+    const originDirection = originVelocity.lengthSquared() > 0.0001 ? originVelocity.clone().normalize() : Vector3.Zero()
+    if (originDirection.lengthSquared() > 0.0001) {
+      const speedStart = new Vector3(0, 5, 0)
+      const speedEnd = speedStart.add(originDirection.scale(Math.min(Math.max(trajectorySpeeds.origin * 0.12, 8), 26)))
+      const speedLine = MeshBuilder.CreateLines('sampling-trajectory-origin-speed-arrow', {
+        points: [speedStart, speedEnd],
+      }, scene)
+      speedLine.color = new Color3(0.36, 0.72, 1)
+      speedLine.isPickable = false
+      meshes.push(speedLine)
+    }
     meshes.push(createSamplingLabel(
       scene,
       `${formatSamplingSpeed(trajectorySpeeds.origin)} cm/s`,
@@ -1137,7 +1162,7 @@ function createSamplingPreview(
       segments: 18,
     }, scene)
     marker.position = point
-    marker.material = trajectoryMaterial
+    marker.material = selectedPointIndex === index ? selectedPointMaterial : trajectoryMaterial
     marker.isPickable = true
     marker.metadata = { samplingTrajectoryIndex: index }
     meshes.push(marker)
@@ -1145,6 +1170,19 @@ function createSamplingPreview(
     const frameOffset = samplingQuery?.trajectory[index]?.frameOffset ?? (index + 1) * 20
     meshes.push(createSamplingLabel(scene, `+${frameOffset}f`, point.add(new Vector3(0, 9, 0)), `sampling-trajectory-label-${index}`))
     if (samplingQuery?.trajectory[index]) {
+      const velocity = trajectorySpeeds.byIndexVelocity[index] ?? Vector3.Zero()
+      const speedDirection = velocity.lengthSquared() > 0.0001 ? velocity.clone().normalize() : Vector3.Zero()
+      if (speedDirection.lengthSquared() > 0.0001) {
+        const speedLength = Math.min(Math.max((trajectorySpeeds.byIndex[index] ?? 0) * 0.12, 8), 26)
+        const speedStart = point.add(new Vector3(0, 5, 0))
+        const speedEnd = speedStart.add(speedDirection.scale(speedLength))
+        const speedLine = MeshBuilder.CreateLines(`sampling-trajectory-speed-arrow-${index}`, {
+          points: [speedStart, speedEnd],
+        }, scene)
+        speedLine.color = new Color3(0.36, 0.72, 1)
+        speedLine.isPickable = false
+        meshes.push(speedLine)
+      }
       meshes.push(createSamplingLabel(
         scene,
         `${formatSamplingSpeed(trajectorySpeeds.byIndex[index] ?? 0)} cm/s`,
@@ -1234,24 +1272,55 @@ function buildSamplingInsertSegments(trajectory: SamplingTrajectoryPoint[]) {
   }))
 }
 
-function buildSamplingTrajectoryOutgoingSpeeds(trajectory: SamplingTrajectoryPoint[], samplingFrameRate: number) {
+function buildSamplingTrajectoryPointSpeeds(trajectory: SamplingTrajectoryPoint[], samplingFrameRate: number) {
   const sortedTrajectory = [...trajectory]
     .map((point, index) => ({ point, index }))
     .sort((left, right) => left.point.frameOffset - right.point.frameOffset)
   const byIndex: number[] = Array.from({ length: trajectory.length }, () => 0)
-  const firstPoint = sortedTrajectory[0]?.point
-  const origin = firstPoint
-    ? calculateSamplingSegmentSpeed(0, [0, 0, 0], firstPoint.frameOffset, firstPoint.position, samplingFrameRate)
-    : 0
+  const byIndexVelocity: Vector3[] = Array.from({ length: trajectory.length }, () => Vector3.Zero())
+  const points = [
+    { frameOffset: 0, position: [0, 0, 0], sourceIndex: -1 },
+    ...sortedTrajectory.map(({ point, index }) => ({ frameOffset: point.frameOffset, position: point.position, sourceIndex: index })),
+  ]
 
-  for (const [sortedIndex, current] of sortedTrajectory.entries()) {
-    const nextPoint = sortedTrajectory[sortedIndex + 1]?.point
-    byIndex[current.index] = nextPoint
-      ? calculateSamplingSegmentSpeed(current.point.frameOffset, current.point.position, nextPoint.frameOffset, nextPoint.position, samplingFrameRate)
-      : 0
+  let origin = 0
+  let originVelocity = Vector3.Zero()
+  for (const [index, point] of points.entries()) {
+    const previous = points[index - 1]
+    const next = points[index + 1]
+    const speed = previous && next
+      ? calculateSamplingSegmentSpeed(previous.frameOffset, previous.position, next.frameOffset, next.position, samplingFrameRate)
+      : next
+        ? calculateSamplingSegmentSpeed(point.frameOffset, point.position, next.frameOffset, next.position, samplingFrameRate)
+        : previous
+          ? calculateSamplingSegmentSpeed(previous.frameOffset, previous.position, point.frameOffset, point.position, samplingFrameRate)
+          : 0
+    if (point.sourceIndex < 0) {
+      origin = speed
+      originVelocity = calculateSamplingSegmentVelocityVector(point, previous, next, samplingFrameRate)
+    } else {
+      byIndex[point.sourceIndex] = speed
+      byIndexVelocity[point.sourceIndex] = calculateSamplingSegmentVelocityVector(point, previous, next, samplingFrameRate)
+    }
   }
 
-  return { origin, byIndex }
+  return { origin, originVelocity, byIndex, byIndexVelocity }
+}
+
+function calculateSamplingSegmentVelocityVector(
+  point: { frameOffset: number; position: number[] },
+  previous: { frameOffset: number; position: number[] } | undefined,
+  next: { frameOffset: number; position: number[] } | undefined,
+  samplingFrameRate: number,
+) {
+  const fromPoint = previous && next ? previous : previous ?? point
+  const toPoint = previous && next ? next : next ?? point
+  const seconds = Math.max(toPoint.frameOffset - fromPoint.frameOffset, 1) / Math.max(samplingFrameRate, 1)
+  return new Vector3(
+    ((toPoint.position[0] ?? 0) - (fromPoint.position[0] ?? 0)) / seconds,
+    0,
+    ((toPoint.position[2] ?? 0) - (fromPoint.position[2] ?? 0)) / seconds,
+  )
 }
 
 function createSamplingQueryVectors(

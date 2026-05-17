@@ -435,6 +435,12 @@
   transform: translateX(-50%);
 }
 
+.timeline-sampling-marker.active {
+  width: 5px;
+  background: #68b7ff;
+  box-shadow: 0 0 0 2px rgba(104, 183, 255, 0.22);
+}
+
 .timeline-frame-tick {
   position: absolute;
   top: 0;
@@ -1135,6 +1141,11 @@
   background: var(--surface-2);
 }
 
+.sampling-trajectory-row.active {
+  border-color: rgba(104, 183, 255, 0.62);
+  background: rgba(104, 183, 255, 0.1);
+}
+
 .sampling-trajectory-row .setting-field {
   gap: 3px;
   font-size: 10px;
@@ -1190,6 +1201,31 @@
   font-size: 10px;
   font-weight: 650;
   white-space: nowrap;
+}
+
+.sampling-name-line {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+}
+
+.sampling-name-line span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sampling-name-line strong {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #ffd48a;
+  background: rgba(242, 183, 83, 0.14);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .sampling-match-section {
